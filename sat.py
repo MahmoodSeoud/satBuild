@@ -5,6 +5,7 @@ Usage:
     sat status                          Show status of all services
     sat deploy <service> <binary>       Upload and deploy a binary
     sat rollback <service>              Rollback to previous version
+    sat logs <service>                  Tail service logs (Ctrl+C to exit)
 """
 
 import json
@@ -265,6 +266,37 @@ def cmd_rollback(config, service):
     return 0
 
 
+def cmd_logs(config, service):
+    """Execute the logs command (stream journalctl output).
+
+    Args:
+        config: Configuration dictionary.
+        service: Service name to get logs for.
+
+    Returns:
+        int: Exit code (0 for success, 1 for failure).
+    """
+    # Validate service exists
+    services = config.get('services', {})
+    if service not in services:
+        print(f"{CROSS} Unknown service: {service}")
+        return 1
+
+    service_config = services[service]
+    systemd_name = service_config.get('systemd', f'{service}.service')
+
+    flatsat = config.get('flatsat', {})
+    host = flatsat.get('host', 'flatsat-disco.local')
+    user = flatsat.get('user', 'root')
+
+    # Stream logs directly (don't capture output)
+    ssh_cmd = ['ssh', f'{user}@{host}', f'journalctl -f -u {systemd_name}']
+
+    result = subprocess.run(ssh_cmd)
+
+    return result.returncode
+
+
 def print_usage():
     """Print usage information."""
     print(__doc__)
@@ -298,6 +330,13 @@ def main():
                 sys.exit(1)
             service = sys.argv[2]
             sys.exit(cmd_rollback(config, service))
+
+        elif command == 'logs':
+            if len(sys.argv) < 3:
+                print(f"{CROSS} Usage: sat logs <service>")
+                sys.exit(1)
+            service = sys.argv[2]
+            sys.exit(cmd_logs(config, service))
 
         else:
             print(f"{CROSS} Unknown command: {command}")

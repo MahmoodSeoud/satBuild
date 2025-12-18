@@ -501,6 +501,49 @@ class TestTimingOutput:
         assert format_duration(125) == '2m 5s'
 
 
+class TestLogsCommand:
+    """Tests for the logs command."""
+
+    def test_logs_calls_ssh_with_journalctl(self, test_config):
+        """Logs should call SSH with journalctl -f command."""
+        from sat import cmd_logs, load_config
+
+        config = load_config(test_config)
+
+        with patch('subprocess.run') as mock_run:
+            mock_run.return_value = MagicMock(returncode=0)
+            cmd_logs(config, 'controller')
+
+        # Should call ssh with journalctl -f -u <service>
+        call_args = mock_run.call_args
+        assert 'ssh' in call_args[0][0]
+        assert 'journalctl' in call_args[0][0][2]
+        assert '-f' in call_args[0][0][2]
+        assert 'controller.service' in call_args[0][0][2]
+
+    def test_logs_returns_0_on_success(self, test_config):
+        """Logs should return 0 on success (user exits)."""
+        from sat import cmd_logs, load_config
+
+        config = load_config(test_config)
+
+        with patch('subprocess.run') as mock_run:
+            mock_run.return_value = MagicMock(returncode=0)
+            result = cmd_logs(config, 'controller')
+
+        assert result == 0
+
+    def test_logs_returns_1_for_unknown_service(self, test_config):
+        """Logs should return 1 for unknown service."""
+        from sat import cmd_logs, load_config
+
+        config = load_config(test_config)
+
+        result = cmd_logs(config, 'unknown_service')
+
+        assert result == 1
+
+
 class TestMainCLI:
     """Tests for the main CLI entry point."""
 
@@ -518,6 +561,21 @@ class TestMainCLI:
                 '',
                 0
             )
+            with pytest.raises(SystemExit) as exc_info:
+                main()
+
+        assert exc_info.value.code == 0
+
+    def test_main_handles_logs_command(self, test_config, monkeypatch):
+        """Main should handle logs command."""
+        from sat import main
+        import sys
+
+        monkeypatch.setenv('SAT_CONFIG', str(test_config))
+        monkeypatch.setattr(sys, 'argv', ['sat', 'logs', 'controller'])
+
+        with patch('subprocess.run') as mock_run:
+            mock_run.return_value = MagicMock(returncode=0)
             with pytest.raises(SystemExit) as exc_info:
                 main()
 
