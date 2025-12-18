@@ -1,0 +1,381 @@
+"""Tests for sat CLI."""
+
+import json
+import subprocess
+from pathlib import Path
+from unittest.mock import patch, MagicMock
+
+import pytest
+
+
+@pytest.fixture
+def test_config(tmp_path):
+    """Create a test config file."""
+    config_content = """
+flatsat:
+  host: flatsat-disco.local
+  user: root
+
+backup_dir: /opt/sat-agent/backups
+version_log: /opt/sat-agent/versions.json
+
+services:
+  controller:
+    binary: /opt/disco/bin/controller
+    systemd: controller.service
+    depends_on:
+      - csp_server
+
+  csp_server:
+    binary: /opt/disco/bin/csp_server
+    systemd: csp_server.service
+    depends_on:
+      - param_handler
+
+  param_handler:
+    binary: /opt/disco/bin/param_handler
+    systemd: param_handler.service
+    depends_on: []
+"""
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text(config_content)
+    return config_file
+
+
+class TestLoadConfig:
+    """Tests for loading configuration."""
+
+    def test_load_config_returns_flatsat_settings(self, test_config):
+        """Should load config and return flatsat settings."""
+        from sat import load_config
+
+        config = load_config(test_config)
+
+        assert 'flatsat' in config
+        assert config['flatsat']['host'] == 'flatsat-disco.local'
+        assert config['flatsat']['user'] == 'root'
+
+    def test_load_config_returns_services(self, test_config):
+        """Should load config and return services dict."""
+        from sat import load_config
+
+        config = load_config(test_config)
+
+        assert 'services' in config
+        assert 'controller' in config['services']
+
+    def test_load_config_missing_file(self, tmp_path):
+        """Should raise error for missing config file."""
+        from sat import load_config
+
+        missing = tmp_path / "missing.yaml"
+        with pytest.raises(FileNotFoundError):
+            load_config(missing)
+
+
+class TestSshRun:
+    """Tests for SSH command execution."""
+
+    def test_ssh_run_constructs_correct_command(self, test_config):
+        """Should construct correct SSH command."""
+        from sat import ssh_run, load_config
+
+        config = load_config(test_config)
+
+        with patch('subprocess.run') as mock_run:
+            mock_run.return_value = MagicMock(
+                stdout='output',
+                stderr='',
+                returncode=0
+            )
+            ssh_run(config, 'test command')
+
+        mock_run.assert_called_once_with(
+            ['ssh', 'root@flatsat-disco.local', 'test command'],
+            capture_output=True,
+            text=True
+        )
+
+    def test_ssh_run_returns_output(self, test_config):
+        """Should return stdout, stderr, and returncode."""
+        from sat import ssh_run, load_config
+
+        config = load_config(test_config)
+
+        with patch('subprocess.run') as mock_run:
+            mock_run.return_value = MagicMock(
+                stdout='output data',
+                stderr='error data',
+                returncode=1
+            )
+            stdout, stderr, returncode = ssh_run(config, 'test')
+
+        assert stdout == 'output data'
+        assert stderr == 'error data'
+        assert returncode == 1
+
+
+class TestRsyncUpload:
+    """Tests for rsync upload functionality."""
+
+    def test_rsync_constructs_correct_command(self, test_config, tmp_path):
+        """Should construct correct rsync command."""
+        from sat import rsync_upload, load_config
+
+        config = load_config(test_config)
+
+        local_file = tmp_path / 'test_binary'
+        local_file.write_text('content')
+
+        with patch('subprocess.run') as mock_run:
+            mock_run.return_value = MagicMock(returncode=0)
+            rsync_upload(config, str(local_file), 'controller')
+
+        expected_cmd = [
+            'rsync', '-az', '--progress',
+            str(local_file),
+            'root@flatsat-disco.local:/opt/disco/bin/controller.new'
+        ]
+        mock_run.assert_called_once_with(
+            expected_cmd,
+            capture_output=True,
+            text=True
+        )
+
+    def test_rsync_returns_success(self, test_config, tmp_path):
+        """Should return success tuple on success."""
+        from sat import rsync_upload, load_config
+
+        config = load_config(test_config)
+
+        local_file = tmp_path / 'test_binary'
+        local_file.write_text('content')
+
+        with patch('subprocess.run') as mock_run:
+            mock_run.return_value = MagicMock(returncode=0)
+            success, error = rsync_upload(config, str(local_file), 'controller')
+
+        assert success is True
+        assert error is None
+
+    def test_rsync_returns_failure_on_error(self, test_config, tmp_path):
+        """Should return failure tuple on rsync error."""
+        from sat import rsync_upload, load_config
+
+        config = load_config(test_config)
+
+        local_file = tmp_path / 'test_binary'
+        local_file.write_text('content')
+
+        with patch('subprocess.run') as mock_run:
+            mock_run.return_value = MagicMock(
+                returncode=1,
+                stderr='connection refused'
+            )
+            success, error = rsync_upload(config, str(local_file), 'controller')
+
+        assert success is False
+        assert 'connection refused' in error
+
+    def test_rsync_fails_for_unknown_service(self, test_config, tmp_path):
+        """Should fail for unknown service."""
+        from sat import rsync_upload, load_config
+
+        config = load_config(test_config)
+
+        local_file = tmp_path / 'test_binary'
+        local_file.write_text('content')
+
+        success, error = rsync_upload(config, str(local_file), 'unknown_service')
+
+        assert success is False
+        assert 'unknown_service' in error
+
+
+class TestStatusCommand:
+    """Tests for the status command."""
+
+    def test_status_calls_agent_via_ssh(self, test_config):
+        """Status should call sat-agent status via SSH."""
+        from sat import cmd_status, load_config
+
+        config = load_config(test_config)
+
+        with patch('sat.ssh_run') as mock_ssh:
+            mock_ssh.return_value = (
+                json.dumps({'status': 'ok', 'services': {'controller': 'running'}}),
+                '',
+                0
+            )
+            cmd_status(config)
+
+        mock_ssh.assert_called_once_with(
+            config,
+            '/opt/sat-agent/sat-agent status'
+        )
+
+    def test_status_returns_0_on_success(self, test_config):
+        """Status should return 0 on success."""
+        from sat import cmd_status, load_config
+
+        config = load_config(test_config)
+
+        with patch('sat.ssh_run') as mock_ssh:
+            mock_ssh.return_value = (
+                json.dumps({'status': 'ok', 'services': {'controller': 'running'}}),
+                '',
+                0
+            )
+            result = cmd_status(config)
+
+        assert result == 0
+
+    def test_status_returns_1_on_ssh_failure(self, test_config):
+        """Status should return 1 when SSH fails."""
+        from sat import cmd_status, load_config
+
+        config = load_config(test_config)
+
+        with patch('sat.ssh_run') as mock_ssh:
+            mock_ssh.return_value = ('', 'connection refused', 1)
+            result = cmd_status(config)
+
+        assert result == 1
+
+    def test_status_returns_1_on_invalid_json(self, test_config):
+        """Status should return 1 when agent returns invalid JSON."""
+        from sat import cmd_status, load_config
+
+        config = load_config(test_config)
+
+        with patch('sat.ssh_run') as mock_ssh:
+            mock_ssh.return_value = ('not json', '', 0)
+            result = cmd_status(config)
+
+        assert result == 1
+
+    def test_status_returns_1_on_agent_error(self, test_config):
+        """Status should return 1 when agent reports error."""
+        from sat import cmd_status, load_config
+
+        config = load_config(test_config)
+
+        with patch('sat.ssh_run') as mock_ssh:
+            mock_ssh.return_value = (
+                json.dumps({'status': 'failed', 'reason': 'config error'}),
+                '',
+                0
+            )
+            result = cmd_status(config)
+
+        assert result == 1
+
+
+class TestDeployCommand:
+    """Tests for the deploy command."""
+
+    def test_deploy_uploads_then_calls_agent(self, test_config, tmp_path):
+        """Deploy should upload binary then call agent deploy."""
+        from sat import cmd_deploy, load_config
+
+        config = load_config(test_config)
+
+        binary = tmp_path / 'controller'
+        binary.write_text('binary')
+
+        call_order = []
+
+        def track_rsync(*args, **kwargs):
+            call_order.append('rsync')
+            return (True, None)
+
+        def track_ssh(*args, **kwargs):
+            call_order.append('ssh')
+            return (
+                json.dumps({'status': 'ok', 'service': 'controller', 'hash': 'abc123'}),
+                '',
+                0
+            )
+
+        with patch('sat.rsync_upload', side_effect=track_rsync), \
+             patch('sat.ssh_run', side_effect=track_ssh):
+            cmd_deploy(config, 'controller', str(binary))
+
+        assert call_order == ['rsync', 'ssh']
+
+    def test_deploy_returns_0_on_success(self, test_config, tmp_path):
+        """Deploy should return 0 on success."""
+        from sat import cmd_deploy, load_config
+
+        config = load_config(test_config)
+
+        binary = tmp_path / 'controller'
+        binary.write_text('binary')
+
+        with patch('sat.rsync_upload', return_value=(True, None)), \
+             patch('sat.ssh_run') as mock_ssh:
+            mock_ssh.return_value = (
+                json.dumps({'status': 'ok', 'service': 'controller', 'hash': 'abc123'}),
+                '',
+                0
+            )
+            result = cmd_deploy(config, 'controller', str(binary))
+
+        assert result == 0
+
+    def test_deploy_returns_1_for_unknown_service(self, test_config, tmp_path):
+        """Deploy should return 1 for unknown service."""
+        from sat import cmd_deploy, load_config
+
+        config = load_config(test_config)
+
+        binary = tmp_path / 'controller'
+        binary.write_text('binary')
+
+        result = cmd_deploy(config, 'unknown_service', str(binary))
+
+        assert result == 1
+
+    def test_deploy_returns_1_for_missing_binary(self, test_config, tmp_path):
+        """Deploy should return 1 when binary doesn't exist."""
+        from sat import cmd_deploy, load_config
+
+        config = load_config(test_config)
+
+        result = cmd_deploy(config, 'controller', str(tmp_path / 'nonexistent'))
+
+        assert result == 1
+
+    def test_deploy_returns_1_on_upload_failure(self, test_config, tmp_path):
+        """Deploy should return 1 when upload fails."""
+        from sat import cmd_deploy, load_config
+
+        config = load_config(test_config)
+
+        binary = tmp_path / 'controller'
+        binary.write_text('binary')
+
+        with patch('sat.rsync_upload', return_value=(False, 'connection refused')):
+            result = cmd_deploy(config, 'controller', str(binary))
+
+        assert result == 1
+
+    def test_deploy_returns_1_on_agent_failure(self, test_config, tmp_path):
+        """Deploy should return 1 when agent reports failure."""
+        from sat import cmd_deploy, load_config
+
+        config = load_config(test_config)
+
+        binary = tmp_path / 'controller'
+        binary.write_text('binary')
+
+        with patch('sat.rsync_upload', return_value=(True, None)), \
+             patch('sat.ssh_run') as mock_ssh:
+            mock_ssh.return_value = (
+                json.dumps({'status': 'failed', 'reason': 'service crashed'}),
+                '',
+                0
+            )
+            result = cmd_deploy(config, 'controller', str(binary))
+
+        assert result == 1

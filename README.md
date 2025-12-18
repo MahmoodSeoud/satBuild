@@ -33,14 +33,24 @@ Fast binary deployment tool for embedded Linux flatsat (satellite engineering mo
 - JSON output for all commands
 - Error handling with JSON error responses
 
-### Pending
+#### sat CLI (Phase 2 complete)
 
-#### sat CLI (Phase 2)
-- `sat status` - SSH to agent, display formatted output
-- `sat deploy <service> <binary>` - rsync + SSH to agent
-- `sat rollback <service>` - Trigger rollback via SSH
-- `sat logs <service>` - Tail journalctl logs
-- `sat restart <service>` - Restart via SSH
+| Command | Status | Description |
+|---------|--------|-------------|
+| `status` | Done | SSH to agent, display formatted output |
+| `deploy <service> <binary>` | Done | rsync + SSH to agent |
+| `rollback <service>` | Pending | Trigger rollback via SSH |
+| `logs <service>` | Pending | Tail journalctl logs |
+| `restart <service>` | Pending | Restart via SSH |
+
+**Features implemented:**
+- Configuration loading from YAML (path configurable via `SAT_CONFIG` env var)
+- SSH command execution to remote flatsat
+- rsync upload of binaries to remote host
+- Nice terminal output with checkmarks/X marks
+- Error handling for SSH and rsync failures
+
+### Pending
 
 #### Rollback (Phase 3)
 - Agent rollback command
@@ -79,6 +89,7 @@ Default production path: `/opt/sat-agent/config.yaml`
 
 | Module | Tests | Status |
 |--------|-------|--------|
+| **sat-agent** | | |
 | Config loading | 2 | Pass |
 | Service status check | 2 | Pass |
 | Status command | 4 | Pass |
@@ -86,7 +97,13 @@ Default production path: `/opt/sat-agent/config.yaml`
 | Service control | 2 | Pass |
 | Binary operations | 5 | Pass |
 | Deploy command | 6 | Pass |
-| **Total** | **27** | **All passing** |
+| **sat CLI** | | |
+| Config loading | 3 | Pass |
+| SSH execution | 2 | Pass |
+| rsync upload | 4 | Pass |
+| Status command | 5 | Pass |
+| Deploy command | 6 | Pass |
+| **Total** | **47** | **All passing** |
 
 ## Architecture
 
@@ -119,16 +136,33 @@ See `plan.md` for full specification.
 # {"status": "ok", "service": "controller", "hash": "a3f2c9b1"}
 ```
 
+### sat CLI Commands (on developer laptop)
+
+```bash
+# Check status of all services
+./sat.py status
+# [+] controller: running
+# [+] csp_server: running
+# [+] param_handler: running
+
+# Deploy a service
+./sat.py deploy controller ./build/controller
+# [~] Uploading controller...
+# [~] Deploying controller...
+# [+] Deployed controller (a3f2c9b1)
+```
+
 ## File Structure
 
 ```
 sat-deploy/
 ├── sat_agent.py              # Agent script (runs on flatsat)
-├── sat                       # CLI script (pending)
-├── config.yaml               # Configuration (pending)
+├── sat.py                    # CLI script (runs on developer laptop)
+├── config.yaml               # Configuration for CLI
 ├── pyproject.toml            # Project configuration
 ├── tests/
-│   └── test_sat_agent.py     # 27 unit tests
+│   ├── test_sat_agent.py     # 27 agent unit tests
+│   └── test_sat.py           # 20 CLI unit tests
 ├── notes/
 │   └── features/             # Feature development notes
 ├── plan.md                   # Full specification
