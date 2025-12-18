@@ -150,8 +150,10 @@ class TestLoadConfig:
         from sat_agent import load_config
 
         missing = tmp_path / "missing.yaml"
-        with pytest.raises(FileNotFoundError):
+        with pytest.raises(FileNotFoundError) as exc_info:
             load_config(missing)
+        # Should mention SAT_AGENT_CONFIG env var
+        assert 'SAT_AGENT_CONFIG' in str(exc_info.value)
 
 
 class TestDependencyResolution:

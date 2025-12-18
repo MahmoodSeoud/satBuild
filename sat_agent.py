@@ -37,7 +37,10 @@ def load_config(config_path=None):
 
     path = Path(config_path)
     if not path.exists():
-        raise FileNotFoundError(f"Config file not found: {config_path}")
+        raise FileNotFoundError(
+            f"Config file not found: {config_path}\n"
+            f"Hint: Set SAT_AGENT_CONFIG env var or create {DEFAULT_CONFIG_PATH}"
+        )
 
     with open(path) as f:
         return yaml.safe_load(f)
