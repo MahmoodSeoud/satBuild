@@ -22,7 +22,7 @@ Fast binary deployment tool for embedded Linux flatsat (satellite engineering mo
 |---------|--------|-------------|
 | `status` | Done | Returns JSON with running/stopped state of all services |
 | `deploy <service>` | Done | Stops dependents, swaps binary, restarts services |
-| `rollback <service>` | Pending | Restore previous binary version |
+| `rollback <service>` | Done | Restore previous binary version |
 | `restart <service>` | Pending | Restart service and dependents |
 
 **Features implemented:**
@@ -39,7 +39,7 @@ Fast binary deployment tool for embedded Linux flatsat (satellite engineering mo
 |---------|--------|-------------|
 | `status` | Done | SSH to agent, display formatted output |
 | `deploy <service> <binary>` | Done | rsync + SSH to agent |
-| `rollback <service>` | Pending | Trigger rollback via SSH |
+| `rollback <service>` | Done | Trigger rollback via SSH |
 | `logs <service>` | Pending | Tail journalctl logs |
 | `restart <service>` | Pending | Restart via SSH |
 
@@ -51,10 +51,6 @@ Fast binary deployment tool for embedded Linux flatsat (satellite engineering mo
 - Error handling for SSH and rsync failures
 
 ### Pending
-
-#### Rollback (Phase 3)
-- Agent rollback command
-- CLI rollback command
 
 #### Polish (Phase 4)
 - Timing output ("Deployed in 34s")
@@ -71,7 +67,7 @@ python3 -m venv .venv
 source .venv/bin/activate
 pip install pytest pyyaml
 
-# Run all tests (27 tests)
+# Run all tests
 python -m pytest tests/ -v
 ```
 
@@ -97,13 +93,17 @@ Default production path: `/opt/sat-agent/config.yaml`
 | Service control | 2 | Pass |
 | Binary operations | 5 | Pass |
 | Deploy command | 6 | Pass |
+| Rollback command | 8 | Pass |
+| Main CLI | 1 | Pass |
 | **sat CLI** | | |
 | Config loading | 3 | Pass |
 | SSH execution | 2 | Pass |
 | rsync upload | 4 | Pass |
 | Status command | 5 | Pass |
 | Deploy command | 6 | Pass |
-| **Total** | **47** | **All passing** |
+| Rollback command | 5 | Pass |
+| Main CLI | 1 | Pass |
+| **Total** | **62** | **All passing** |
 
 ## Architecture
 
@@ -150,6 +150,11 @@ See `plan.md` for full specification.
 # [~] Uploading controller...
 # [~] Deploying controller...
 # [+] Deployed controller (a3f2c9b1)
+
+# Rollback a service
+./sat.py rollback controller
+# [~] Rolling back controller...
+# [+] Rolled back controller (prev_hash)
 ```
 
 ## File Structure

@@ -379,3 +379,103 @@ class TestDeployCommand:
             result = cmd_deploy(config, 'controller', str(binary))
 
         assert result == 1
+
+
+class TestRollbackCommand:
+    """Tests for the rollback command."""
+
+    def test_rollback_calls_agent_via_ssh(self, test_config):
+        """Rollback should call sat-agent rollback via SSH."""
+        from sat import cmd_rollback, load_config
+
+        config = load_config(test_config)
+
+        with patch('sat.ssh_run') as mock_ssh:
+            mock_ssh.return_value = (
+                json.dumps({'status': 'ok', 'service': 'controller', 'hash': 'abc123'}),
+                '',
+                0
+            )
+            cmd_rollback(config, 'controller')
+
+        mock_ssh.assert_called_once_with(
+            config,
+            '/opt/sat-agent/sat-agent rollback controller'
+        )
+
+    def test_rollback_returns_0_on_success(self, test_config):
+        """Rollback should return 0 on success."""
+        from sat import cmd_rollback, load_config
+
+        config = load_config(test_config)
+
+        with patch('sat.ssh_run') as mock_ssh:
+            mock_ssh.return_value = (
+                json.dumps({'status': 'ok', 'service': 'controller', 'hash': 'abc123'}),
+                '',
+                0
+            )
+            result = cmd_rollback(config, 'controller')
+
+        assert result == 0
+
+    def test_rollback_returns_1_on_ssh_failure(self, test_config):
+        """Rollback should return 1 when SSH fails."""
+        from sat import cmd_rollback, load_config
+
+        config = load_config(test_config)
+
+        with patch('sat.ssh_run') as mock_ssh:
+            mock_ssh.return_value = ('', 'connection refused', 1)
+            result = cmd_rollback(config, 'controller')
+
+        assert result == 1
+
+    def test_rollback_returns_1_on_agent_error(self, test_config):
+        """Rollback should return 1 when agent reports error."""
+        from sat import cmd_rollback, load_config
+
+        config = load_config(test_config)
+
+        with patch('sat.ssh_run') as mock_ssh:
+            mock_ssh.return_value = (
+                json.dumps({'status': 'failed', 'reason': 'No backup found'}),
+                '',
+                0
+            )
+            result = cmd_rollback(config, 'controller')
+
+        assert result == 1
+
+    def test_rollback_returns_1_for_unknown_service(self, test_config):
+        """Rollback should return 1 for unknown service."""
+        from sat import cmd_rollback, load_config
+
+        config = load_config(test_config)
+
+        result = cmd_rollback(config, 'unknown_service')
+
+        assert result == 1
+
+
+class TestMainCLI:
+    """Tests for the main CLI entry point."""
+
+    def test_main_handles_rollback_command(self, test_config, monkeypatch):
+        """Main should handle rollback command."""
+        from sat import main
+        import sys
+
+        monkeypatch.setenv('SAT_CONFIG', str(test_config))
+        monkeypatch.setattr(sys, 'argv', ['sat', 'rollback', 'controller'])
+
+        with patch('sat.ssh_run') as mock_ssh:
+            mock_ssh.return_value = (
+                json.dumps({'status': 'ok', 'service': 'controller', 'hash': 'abc123'}),
+                '',
+                0
+            )
+            with pytest.raises(SystemExit) as exc_info:
+                main()
+
+        assert exc_info.value.code == 0
