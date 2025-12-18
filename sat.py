@@ -4,6 +4,7 @@
 Usage:
     sat status                          Show status of all services
     sat deploy <service> <binary>       Upload and deploy a binary
+    sat rollback <service>              Rollback to previous version
 """
 
 import json
@@ -201,6 +202,49 @@ def cmd_deploy(config, service, binary_path):
     return 0
 
 
+def cmd_rollback(config, service):
+    """Execute the rollback command.
+
+    Args:
+        config: Configuration dictionary.
+        service: Service name to rollback.
+
+    Returns:
+        int: Exit code (0 for success, 1 for failure).
+    """
+    # Validate service exists
+    services = config.get('services', {})
+    if service not in services:
+        print(f"{CROSS} Unknown service: {service}")
+        return 1
+
+    # Run rollback on agent
+    print(f"{ARROW} Rolling back {service}...")
+    stdout, stderr, returncode = ssh_run(
+        config,
+        f'/opt/sat-agent/sat-agent rollback {service}'
+    )
+
+    if returncode != 0:
+        print(f"{CROSS} Rollback failed: {stderr}")
+        return 1
+
+    try:
+        response = json.loads(stdout)
+    except json.JSONDecodeError:
+        print(f"{CROSS} Invalid response from agent: {stdout}")
+        return 1
+
+    if response.get('status') != 'ok':
+        print(f"{CROSS} Rollback failed: {response.get('reason', 'Unknown error')}")
+        return 1
+
+    file_hash = response.get('hash', 'unknown')
+    print(f"{CHECK} Rolled back {service} ({file_hash})")
+
+    return 0
+
+
 def print_usage():
     """Print usage information."""
     print(__doc__)
@@ -227,6 +271,13 @@ def main():
             service = sys.argv[2]
             binary = sys.argv[3]
             sys.exit(cmd_deploy(config, service, binary))
+
+        elif command == 'rollback':
+            if len(sys.argv) < 3:
+                print(f"{CROSS} Usage: sat rollback <service>")
+                sys.exit(1)
+            service = sys.argv[2]
+            sys.exit(cmd_rollback(config, service))
 
         else:
             print(f"{CROSS} Unknown command: {command}")
