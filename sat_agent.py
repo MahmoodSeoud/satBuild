@@ -125,6 +125,175 @@ def get_start_order(service, config):
     return list(reversed(get_stop_order(service, config)))
 
 
+def stop_service(service_name):
+    """Stop a systemd service.
+
+    Args:
+        service_name: Name of the systemd service.
+    """
+    subprocess.run(
+        ['systemctl', 'stop', service_name],
+        capture_output=True,
+        text=True,
+        check=True
+    )
+
+
+def start_service(service_name):
+    """Start a systemd service.
+
+    Args:
+        service_name: Name of the systemd service.
+    """
+    subprocess.run(
+        ['systemctl', 'start', service_name],
+        capture_output=True,
+        text=True,
+        check=True
+    )
+
+
+def backup_binary(service, config):
+    """Backup current binary before deployment.
+
+    Args:
+        service: Service name.
+        config: Configuration dictionary.
+    """
+    services = config.get('services', {})
+    service_config = services.get(service, {})
+    binary_path = Path(service_config.get('binary', ''))
+    backup_dir = Path(config.get('backup_dir', '/opt/sat-agent/backups'))
+
+    if not binary_path.exists():
+        return  # First deploy, nothing to backup
+
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    backup_path = backup_dir / f'{service}.prev'
+
+    import shutil
+    shutil.copy2(binary_path, backup_path)
+
+
+def swap_binary(service, config):
+    """Swap .new binary to final path.
+
+    Args:
+        service: Service name.
+        config: Configuration dictionary.
+
+    Raises:
+        FileNotFoundError: If .new file doesn't exist.
+    """
+    services = config.get('services', {})
+    service_config = services.get(service, {})
+    binary_path = Path(service_config.get('binary', ''))
+    new_path = Path(str(binary_path) + '.new')
+
+    if not new_path.exists():
+        raise FileNotFoundError(f"New binary not found: {new_path}")
+
+    new_path.rename(binary_path)
+    binary_path.chmod(0o755)
+
+
+def compute_hash(file_path):
+    """Compute SHA256 hash of file (first 8 chars).
+
+    Args:
+        file_path: Path to the file.
+
+    Returns:
+        str: First 8 characters of hex digest.
+    """
+    import hashlib
+    with open(file_path, 'rb') as f:
+        return hashlib.sha256(f.read()).hexdigest()[:8]
+
+
+def log_deployment(service, file_hash, config):
+    """Log deployment to versions.json.
+
+    Args:
+        service: Service name.
+        file_hash: Hash of deployed binary.
+        config: Configuration dictionary.
+    """
+    from datetime import datetime
+
+    version_log = Path(config.get('version_log', '/opt/sat-agent/versions.json'))
+
+    entries = []
+    if version_log.exists():
+        entries = json.loads(version_log.read_text())
+
+    entries.append({
+        'service': service,
+        'hash': file_hash,
+        'timestamp': datetime.now().isoformat()
+    })
+
+    version_log.parent.mkdir(parents=True, exist_ok=True)
+    version_log.write_text(json.dumps(entries, indent=2))
+
+
+def deploy(service, config):
+    """Deploy a service.
+
+    Args:
+        service: Service name to deploy.
+        config: Configuration dictionary.
+
+    Returns:
+        dict: Result with 'status', 'service', and 'hash' or 'reason'.
+    """
+    services = config.get('services', {})
+
+    if service not in services:
+        return {'status': 'failed', 'reason': f'Unknown service: {service}'}
+
+    service_config = services[service]
+    systemd_name = service_config.get('systemd', f'{service}.service')
+
+    try:
+        # Stop services in order (dependents first)
+        stop_order = get_stop_order(service, config)
+        for svc in stop_order:
+            svc_config = services.get(svc, {})
+            svc_systemd = svc_config.get('systemd', f'{svc}.service')
+            stop_service(svc_systemd)
+
+        # Backup and swap binary
+        backup_binary(service, config)
+        swap_binary(service, config)
+
+        # Compute hash of new binary
+        binary_path = Path(service_config.get('binary', ''))
+        file_hash = compute_hash(binary_path)
+
+        # Start services in order (service first, then dependents)
+        start_order = get_start_order(service, config)
+        for svc in start_order:
+            svc_config = services.get(svc, {})
+            svc_systemd = svc_config.get('systemd', f'{svc}.service')
+            start_service(svc_systemd)
+
+        # Verify service is running
+        if check_service_status(systemd_name) != 'running':
+            return {
+                'status': 'failed',
+                'reason': f'Service {service} not running after start'
+            }
+
+        # Log deployment
+        log_deployment(service, file_hash, config)
+
+        return {'status': 'ok', 'service': service, 'hash': file_hash}
+
+    except Exception as e:
+        return {'status': 'failed', 'reason': str(e)}
+
+
 def get_status(config):
     """Get status of all configured services.
 
@@ -161,6 +330,15 @@ def main():
         if command == 'status':
             result = get_status(config)
             print(json.dumps(result))
+        elif command == 'deploy':
+            if len(sys.argv) < 3:
+                print(json.dumps({'status': 'failed', 'reason': 'deploy requires service name'}))
+                sys.exit(1)
+            service = sys.argv[2]
+            result = deploy(service, config)
+            print(json.dumps(result))
+            if result['status'] == 'failed':
+                sys.exit(1)
         else:
             print(json.dumps({'status': 'failed', 'reason': f'Unknown command: {command}'}))
             sys.exit(1)
