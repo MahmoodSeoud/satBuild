@@ -4,10 +4,13 @@
 Runs on the flatsat to handle deployment commands from the CLI.
 """
 
+import hashlib
 import json
 import os
+import shutil
 import subprocess
 import sys
+from datetime import datetime
 from pathlib import Path
 
 import yaml
@@ -171,7 +174,6 @@ def backup_binary(service, config):
     backup_dir.mkdir(parents=True, exist_ok=True)
     backup_path = backup_dir / f'{service}.prev'
 
-    import shutil
     shutil.copy2(binary_path, backup_path)
 
 
@@ -206,7 +208,6 @@ def compute_hash(file_path):
     Returns:
         str: First 8 characters of hex digest.
     """
-    import hashlib
     with open(file_path, 'rb') as f:
         return hashlib.sha256(f.read()).hexdigest()[:8]
 
@@ -219,8 +220,6 @@ def log_deployment(service, file_hash, config):
         file_hash: Hash of deployed binary.
         config: Configuration dictionary.
     """
-    from datetime import datetime
-
     version_log = Path(config.get('version_log', '/opt/sat-agent/versions.json'))
 
     entries = []
