@@ -180,3 +180,72 @@ class Deployer:
                 app_name=app_name,
                 error_message=str(e),
             )
+
+    def rollback(
+        self,
+        app_name: str,
+        remote_path: str,
+        service: Optional[str],
+        service_manager: "ServiceManager",
+        version: Optional[str] = None,
+    ) -> DeployResult:
+        """Rollback to a previous version.
+
+        Args:
+            app_name: The application name.
+            remote_path: Path on the remote host.
+            service: The systemd service name, or None for libraries.
+            service_manager: The service manager instance.
+            version: Specific version to restore, or None for most recent.
+
+        Returns:
+            DeployResult with success status and metadata.
+        """
+        try:
+            backups = self.list_backups(app_name)
+
+            if not backups:
+                return DeployResult(
+                    success=False,
+                    app_name=app_name,
+                    error_message="No backups available for rollback",
+                )
+
+            if version:
+                matching = [b for b in backups if b["version"] == version]
+                if not matching:
+                    return DeployResult(
+                        success=False,
+                        app_name=app_name,
+                        error_message=f"Version {version} not found",
+                    )
+                backup = matching[0]
+            else:
+                backup = backups[0]
+
+            backup_path = backup["path"]
+
+            if service:
+                service_manager.stop(service)
+
+            self._ssh.run(f"cp '{backup_path}' '{remote_path}'")
+            self._ssh.run(f"chmod +x '{remote_path}'")
+
+            health_check_passed = None
+            if service:
+                service_manager.start(service)
+                health_check_passed = service_manager.is_healthy(service)
+
+            return DeployResult(
+                success=True,
+                app_name=app_name,
+                backup_path=backup_path,
+                health_check_passed=health_check_passed,
+            )
+
+        except Exception as e:
+            return DeployResult(
+                success=False,
+                app_name=app_name,
+                error_message=str(e),
+            )
