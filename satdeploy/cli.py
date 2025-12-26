@@ -313,9 +313,13 @@ def list_backups(app: str, config_dir: Path | None):
                 click.echo(f"No backups found for {app}.")
                 return
 
-            click.echo(f"{'VERSION':<25} {'TIMESTAMP':<20}")
+            click.echo(click.style(f"Backups for {app}:", bold=True))
+            click.echo("")
             for backup in backups:
-                click.echo(f"{backup['version']:<25} {backup['timestamp']:<20}")
+                bullet = click.style(SYMBOLS["bullet"], fg="cyan")
+                version = click.style(backup["version"], fg="white")
+                timestamp = click.style(backup["timestamp"], fg="bright_black")
+                click.echo(f"  {bullet} {version}  {timestamp}")
 
         except SSHError as e:
             raise click.ClickException(str(e))
