@@ -1,6 +1,10 @@
 # Feature: Week 2 - Rollback, List, and Dependency Resolution
 
-## Features to Implement
+## Status: COMPLETED
+
+All Week 2 features have been implemented and tested.
+
+## Features Implemented
 1. `satdeploy rollback <app>` - Restore most recent backup
 2. `satdeploy rollback <app> <version>` - Restore specific version
 3. `satdeploy list <app>` - Show version history from remote backups
@@ -28,11 +32,21 @@
 - Stop order: topological sort (dependents first)
 - Start order: reverse of stop order
 - Also handle `restart` list for libraries
+- Cyclic dependency detection added
 
 ## Implementation Order (TDD)
-1. Deployer.list_backups() - list remote backups
-2. Deployer.rollback() - restore a backup
-3. CLI list command
-4. CLI rollback command
-5. Dependencies module - graph resolution
-6. Integrate deps into push/rollback
+1. [x] Deployer.list_backups() - list remote backups
+2. [x] Deployer.rollback() - restore a backup
+3. [x] CLI list command
+4. [x] CLI rollback command
+5. [x] Dependencies module - graph resolution
+6. [x] Integrate deps into push/rollback
+
+## Tests Added
+- 130 total tests now passing
+- test_deployer.py: TestListBackups, TestRollback classes
+- test_cli_list.py: TestListCommand class
+- test_cli_rollback.py: TestRollbackCommand, TestRollbackWithDependencies classes
+- test_dependencies.py: TestBuildGraph, TestStopOrder, TestStartOrder,
+  TestRestartList, TestCyclicDependencyDetection classes
+- test_cli_push.py: TestPushWithDependencies class
