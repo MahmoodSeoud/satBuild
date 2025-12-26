@@ -10,6 +10,15 @@ if TYPE_CHECKING:
     from satdeploy.ssh import SSHClient
 
 
+def parse_backup_timestamp(version: str) -> str:
+    """Parse version string (YYYYMMDD-HHMMSS) to human-readable timestamp."""
+    try:
+        dt = datetime.strptime(version, "%Y%m%d-%H%M%S")
+        return dt.strftime("%Y-%m-%d %H:%M:%S")
+    except ValueError:
+        return version
+
+
 @dataclass
 class DeployResult:
     """Result of a deployment operation."""
@@ -49,6 +58,33 @@ class Deployer:
             for chunk in iter(lambda: f.read(8192), b""):
                 sha256.update(chunk)
         return sha256.hexdigest()[:8]
+
+    def list_backups(self, app_name: str) -> list[dict]:
+        """List available backups for an app.
+
+        Args:
+            app_name: The application name.
+
+        Returns:
+            List of backup info dicts with keys: version, timestamp, path.
+            Sorted by version (newest first).
+        """
+        backup_dir = f"{self._backup_dir}/{app_name}"
+        result = self._ssh.run(f"ls '{backup_dir}' 2>/dev/null || true", check=False)
+
+        backups = []
+        for line in result.stdout.strip().split("\n"):
+            if not line or not line.endswith(".bak"):
+                continue
+            version = line.replace(".bak", "")
+            backups.append({
+                "version": version,
+                "timestamp": parse_backup_timestamp(version),
+                "path": f"{backup_dir}/{line}",
+            })
+
+        backups.sort(key=lambda b: b["version"], reverse=True)
+        return backups
 
     def backup(self, app_name: str, remote_path: str) -> Optional[str]:
         """Create a backup of the current remote binary.

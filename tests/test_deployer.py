@@ -367,3 +367,93 @@ class TestPush:
         mock_services.stop.assert_not_called()
         mock_services.start.assert_not_called()
         assert result.success is True
+
+
+class TestListBackups:
+    """Test listing remote backups."""
+
+    def test_list_backups_returns_list(self):
+        """list_backups should return a list of backup info."""
+        mock_ssh = Mock()
+        mock_ssh.run.return_value = Mock(
+            stdout="20240115-143022.bak\n20240114-091500.bak\n",
+            exit_code=0,
+        )
+
+        deployer = Deployer(
+            ssh=mock_ssh,
+            backup_dir="/opt/satdeploy/backups",
+            max_backups=10,
+        )
+        backups = deployer.list_backups("controller")
+
+        assert isinstance(backups, list)
+        assert len(backups) == 2
+
+    def test_list_backups_returns_empty_list_when_no_backups(self):
+        """list_backups should return empty list if no backups exist."""
+        mock_ssh = Mock()
+        mock_ssh.run.return_value = Mock(stdout="", exit_code=0)
+
+        deployer = Deployer(
+            ssh=mock_ssh,
+            backup_dir="/opt/satdeploy/backups",
+            max_backups=10,
+        )
+        backups = deployer.list_backups("controller")
+
+        assert backups == []
+
+    def test_list_backups_parses_timestamp(self):
+        """list_backups should parse timestamp from backup filename."""
+        mock_ssh = Mock()
+        mock_ssh.run.return_value = Mock(
+            stdout="20240115-143022.bak\n",
+            exit_code=0,
+        )
+
+        deployer = Deployer(
+            ssh=mock_ssh,
+            backup_dir="/opt/satdeploy/backups",
+            max_backups=10,
+        )
+        backups = deployer.list_backups("controller")
+
+        assert backups[0]["version"] == "20240115-143022"
+        assert backups[0]["timestamp"] == "2024-01-15 14:30:22"
+
+    def test_list_backups_sorted_newest_first(self):
+        """list_backups should return backups sorted newest first."""
+        mock_ssh = Mock()
+        mock_ssh.run.return_value = Mock(
+            stdout="20240114-091500.bak\n20240115-143022.bak\n20240113-160000.bak\n",
+            exit_code=0,
+        )
+
+        deployer = Deployer(
+            ssh=mock_ssh,
+            backup_dir="/opt/satdeploy/backups",
+            max_backups=10,
+        )
+        backups = deployer.list_backups("controller")
+
+        assert backups[0]["version"] == "20240115-143022"
+        assert backups[1]["version"] == "20240114-091500"
+        assert backups[2]["version"] == "20240113-160000"
+
+    def test_list_backups_includes_full_path(self):
+        """list_backups should include full path to backup file."""
+        mock_ssh = Mock()
+        mock_ssh.run.return_value = Mock(
+            stdout="20240115-143022.bak\n",
+            exit_code=0,
+        )
+
+        deployer = Deployer(
+            ssh=mock_ssh,
+            backup_dir="/opt/satdeploy/backups",
+            max_backups=10,
+        )
+        backups = deployer.list_backups("controller")
+
+        assert backups[0]["path"] == "/opt/satdeploy/backups/controller/20240115-143022.bak"
