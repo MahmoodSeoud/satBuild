@@ -7,7 +7,7 @@ import click
 
 from satdeploy.config import DEFAULT_CONFIG_DIR, Config
 from satdeploy.deployer import Deployer
-from satdeploy.services import ServiceManager
+from satdeploy.services import ServiceManager, ServiceStatus
 from satdeploy.ssh import SSHClient
 
 
@@ -129,3 +129,54 @@ def push(app: str, local: str | None, config_dir: Path | None):
                 click.echo(f"  Warning: Health check failed")
 
         click.echo(f"Successfully deployed {app} ({result.binary_hash})")
+
+
+@main.command()
+@click.option(
+    "--config-dir",
+    type=click.Path(path_type=Path),
+    default=None,
+    help="Config directory (default: ~/.satdeploy)",
+)
+def status(config_dir: Path | None):
+    """Show status of deployed apps and services."""
+    config_dir = config_dir or DEFAULT_CONFIG_DIR
+    config = Config(config_dir=config_dir)
+
+    if config.load() is None:
+        raise click.ClickException(
+            f"Config not found at {config.config_path}. Run 'satdeploy init' first."
+        )
+
+    target = config.target
+    apps = config.apps
+
+    click.echo(f"Target: {target['host']} ({target['user']})")
+    click.echo("")
+
+    if not apps:
+        click.echo("No apps configured.")
+        return
+
+    with SSHClient(host=target["host"], user=target["user"]) as ssh:
+        service_manager = ServiceManager(ssh)
+
+        for app_name, app_config in apps.items():
+            service = app_config.get("service")
+            remote_path = app_config.get("remote")
+
+            if service:
+                svc_status = service_manager.get_status(service)
+                if svc_status == ServiceStatus.RUNNING:
+                    status_str = "running"
+                elif svc_status == ServiceStatus.STOPPED:
+                    status_str = "stopped"
+                elif svc_status == ServiceStatus.FAILED:
+                    status_str = "failed"
+                else:
+                    status_str = "unknown"
+                click.echo(f"  {app_name}: {status_str} ({service})")
+            else:
+                deployed = ssh.file_exists(remote_path)
+                status_str = "deployed" if deployed else "not deployed"
+                click.echo(f"  {app_name}: {status_str} (library)")
