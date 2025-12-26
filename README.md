@@ -123,44 +123,48 @@ Start order: param_handler → csp_server → controller
 
 ```
 $ satdeploy status
-Target: 100.114.151.102 (mseo)
+Target: 192.168.1.50 (root)
 
-    APP              STATUS        	HASH
-    ---------------------------------------------
-  • test_app        deployed      	42fb01da
-  • test_app2       stopped       	-
+    APP              STATUS        	HASH       TIMESTAMP
+    ------------------------------------------------------------
+  ▸ controller      running       	a3f2c9b8  2024-01-15 14:30:22
+  ▸ csp_server      running       	b7e1d2a4  2024-01-15 09:15:44
+  • libparam        deployed      	c4d5e6f1  2024-01-12 16:23:01
 
-$ satdeploy push test_app
-Connecting to 100.114.151.102...
-Deploying test_app...
-[1/2] Backing up mseo@100.114.151.102:/home/mseo/Disco/2025-12-26/test_app
-[2/2] Uploading /Users/mahmood/projects/test/build/test_app
-                → mseo@100.114.151.102:/home/mseo/Disco/2025-12-26/test_app
-▸ Deployed test_app (42fb01da)
+$ satdeploy push controller
+Connecting to 192.168.1.50...
+Deploying controller...
+[1/4] Stopping controller (controller.service)
+[2/4] Backing up root@192.168.1.50:/opt/disco/bin/controller
+[3/4] Uploading ./build/controller
+                → root@192.168.1.50:/opt/disco/bin/controller
+[4/4] Starting controller (controller.service)
+▸ Deployed controller (e5f6a7b9)
 
-$ satdeploy list test_app
-Backups for test_app:
+$ satdeploy list controller
+Backups for controller:
 
     HASH       TIMESTAMP
     ------------------------------
-  → 42fb01da  2025-12-27 00:07:48
-  • -         2025-12-26 23:10:09
-  • -         2025-12-26 22:56:08
+  → e5f6a7b9  2024-01-15 14:35:10
+  • a3f2c9b8  2024-01-15 14:30:22
+  • d2c3b4a5  2024-01-14 09:15:00
 
-$ satdeploy logs test_app2 -n 10
-Logs for test_app2 (test_app2.service):
+$ satdeploy logs controller -n 5
+Logs for controller (controller.service):
 
-Dec 26 22:15:05 mseo-pi systemd[1]: Started test_app2.service - Test App 2 for satdeploy.
-Dec 26 22:15:05 mseo-pi test_app2[23970]: Hello from test_app2 - VERSION 2!
-Dec 26 22:15:05 mseo-pi test_app2[23970]: This is the updated version
-Dec 26 22:15:05 mseo-pi test_app2[23971]: Fri 26 Dec 22:15:05 CET 2025
-Dec 26 22:15:05 mseo-pi systemd[1]: test_app2.service: Deactivated successfully.
+Jan 15 14:35:12 flatsat systemd[1]: Started controller.service.
+Jan 15 14:35:12 flatsat controller[1234]: Initializing...
+Jan 15 14:35:13 flatsat controller[1234]: Connected to csp_server
+Jan 15 14:35:13 flatsat controller[1234]: Ready
 
-$ satdeploy rollback test_app
-Connecting to 100.114.151.102...
-Rolling back test_app...
-[1/1] Restoring 20251226-225608
-▸ Rolled back test_app to 20251226-225608
+$ satdeploy rollback controller
+Connecting to 192.168.1.50...
+Rolling back controller...
+[1/3] Stopping controller (controller.service)
+[2/3] Restoring a3f2c9b8
+[3/3] Starting controller (controller.service)
+▸ Rolled back controller to a3f2c9b8
 ```
 
 ## Requirements

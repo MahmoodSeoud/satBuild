@@ -240,9 +240,9 @@ def status(config_dir: Path | None):
         return
 
     # Print header
-    header = f"    {'APP':<16} {'STATUS':<14}\t{'HASH'}"
+    header = f"    {'APP':<16} {'STATUS':<14}\t{'HASH':<10} {'TIMESTAMP'}"
     click.echo(click.style(header, fg="bright_black"))
-    click.echo(click.style("    " + "-" * 45, fg="bright_black"))
+    click.echo(click.style("    " + "-" * 60, fg="bright_black"))
 
     try:
         with SSHClient(host=target["host"], user=target["user"]) as ssh:
@@ -252,15 +252,26 @@ def status(config_dir: Path | None):
                 service = app_config.get("service")
                 remote_path = app_config.get("remote")
 
-                # Get hash from history
+                # Get hash and timestamp from history
                 last_deploy = history.get_last_deployment(app_name)
                 if last_deploy and last_deploy.success and last_deploy.backup_path:
-                    # Extract hash from backup path (e.g., "abc123" from ".../20240115-143022-abc123.bak")
+                    # Extract hash and timestamp from backup path (e.g., "20240115-143022-abc123" from ".../20240115-143022-abc123.bak")
                     backup_filename = os.path.basename(last_deploy.backup_path).replace(".bak", "")
                     version_parts = backup_filename.split("-")
                     hash_display = version_parts[2] if len(version_parts) >= 3 else "-"
+                    # Parse timestamp from YYYYMMDD-HHMMSS format
+                    if len(version_parts) >= 2:
+                        from datetime import datetime
+                        try:
+                            dt = datetime.strptime(f"{version_parts[0]}-{version_parts[1]}", "%Y%m%d-%H%M%S")
+                            timestamp_display = dt.strftime("%Y-%m-%d %H:%M:%S")
+                        except ValueError:
+                            timestamp_display = "-"
+                    else:
+                        timestamp_display = "-"
                 else:
                     hash_display = "-"
+                    timestamp_display = "-"
 
                 # First check if file exists
                 deployed = ssh.file_exists(remote_path)
@@ -297,12 +308,14 @@ def status(config_dir: Path | None):
                 # Pad plain text first, then colorize
                 name_col = f"{app_name:<16}"
                 status_col = f"{status_text:<14}"
-                hash_col = hash_display
+                hash_col = f"{hash_display:<10}"
+                timestamp_col = timestamp_display
 
                 click.echo(
                     f"  {symbol} {name_col}"
                     f"{click.style(status_col, fg=status_color)}\t"
                     f"{click.style(hash_col, fg='white')}"
+                    f"{click.style(timestamp_col, fg='bright_black')}"
                 )
 
     except SSHError as e:
