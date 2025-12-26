@@ -137,6 +137,26 @@ class TestBackup:
 class TestDeploy:
     """Test deployment logic."""
 
+    def test_deploy_creates_parent_directory(self, tmp_path):
+        """Should create parent directory on remote if needed."""
+        mock_ssh = Mock()
+        mock_ssh.run.return_value = Mock(exit_code=0)
+
+        binary = tmp_path / "controller"
+        binary.write_bytes(b"binary content")
+
+        deployer = Deployer(
+            ssh=mock_ssh,
+            backup_dir="/opt/satdeploy/backups",
+            max_backups=10,
+        )
+        deployer.deploy(str(binary), "/opt/disco/bin/controller")
+
+        # Should have called mkdir -p for parent directory
+        mkdir_calls = [c for c in mock_ssh.run.call_args_list if "mkdir" in str(c)]
+        assert len(mkdir_calls) > 0
+        assert "/opt/disco/bin" in str(mkdir_calls[0])
+
     def test_deploy_uploads_binary(self, tmp_path):
         """Should upload the local binary to remote path."""
         mock_ssh = Mock()

@@ -80,6 +80,11 @@ class Deployer:
             local_path: Path to the local binary.
             remote_path: Path on the remote host.
         """
+        # Create parent directory if it doesn't exist
+        parent_dir = "/".join(remote_path.rsplit("/", 1)[:-1])
+        if parent_dir:
+            self._ssh.run(f"mkdir -p '{parent_dir}'")
+
         self._ssh.upload(local_path, remote_path)
         self._ssh.run(f"chmod +x '{remote_path}'")
 
