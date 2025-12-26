@@ -9,6 +9,7 @@ from satdeploy.config import DEFAULT_CONFIG_DIR, Config
 from satdeploy.dependencies import DependencyResolver
 from satdeploy.deployer import Deployer
 from satdeploy.history import DeploymentRecord, History
+from satdeploy.output import success, error, warning, info, step, SYMBOLS
 from satdeploy.services import ServiceManager, ServiceStatus
 from satdeploy.ssh import SSHClient, SSHError
 
@@ -147,28 +148,38 @@ def push(app: str, local: str | None, config_dir: Path | None):
             else:
                 services_to_manage = []
 
+            # Calculate total steps: backup + deploy + stop services + start services + health checks
+            num_services = len(services_to_manage)
+            total_steps = 2 + num_services * 2  # backup, deploy, stop each, start each
+            current_step = 0
+
             click.echo(f"Deploying {app}...")
 
             # Stop services in order
             for svc_app, svc_name in services_to_manage:
-                click.echo(f"  Stopping {svc_app} ({svc_name})...")
+                current_step += 1
+                click.echo(step(current_step, total_steps, f"Stopping {svc_app} ({svc_name})"))
                 service_manager.stop(svc_name)
 
             # Backup and deploy
+            current_step += 1
+            click.echo(step(current_step, total_steps, f"Backing up {remote_path}"))
             backup_path = deployer.backup(app, remote_path)
+
+            current_step += 1
+            click.echo(step(current_step, total_steps, f"Uploading {local_path} {SYMBOLS['arrow']} {remote_path}"))
             deployer.deploy(local_path, remote_path)
             binary_hash = deployer.compute_hash(local_path)
 
-            click.echo(f"  Uploaded {local_path} -> {remote_path}")
-
             # Start services in reverse order
             for svc_app, svc_name in reversed(services_to_manage):
-                click.echo(f"  Starting {svc_app} ({svc_name})...")
+                current_step += 1
+                click.echo(step(current_step, total_steps, f"Starting {svc_app} ({svc_name})"))
                 service_manager.start(svc_name)
                 if service_manager.is_healthy(svc_name):
-                    click.echo(f"  Health check passed for {svc_app}")
+                    click.echo(success(f"Health check passed for {svc_app}"))
                 else:
-                    click.echo(f"  Warning: Health check failed for {svc_app}")
+                    click.echo(warning(f"Health check failed for {svc_app}"))
 
             # Log successful deployment
             history.record(DeploymentRecord(
@@ -180,7 +191,7 @@ def push(app: str, local: str | None, config_dir: Path | None):
                 success=True,
             ))
 
-            click.echo(f"Successfully deployed {app} ({binary_hash})")
+            click.echo(success(f"Deployed {app} ({binary_hash})"))
 
     except SSHError as e:
         # Log failed deployment
