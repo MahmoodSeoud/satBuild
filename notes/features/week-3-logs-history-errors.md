@@ -38,3 +38,17 @@
 - `ServiceManager.get_logs()` already exists in services.py
 - Need to create `satdeploy/history.py` module
 - Integrate history logging into push/rollback commands
+
+## Implementation Complete
+
+All Week 3 features implemented:
+
+1. **logs command** - Added `satdeploy logs <app>` with `--lines/-n` option
+2. **history.py** - Created SQLite-based deployment history tracking
+3. **Push logging** - Records successful/failed pushes with binary hash
+4. **Rollback logging** - Records successful/failed rollbacks with backup path
+5. **SSH error handling** - Graceful handling of connection errors:
+   - Authentication failures
+   - Connection refused
+   - Connection timeout
+   - Host key verification errors
