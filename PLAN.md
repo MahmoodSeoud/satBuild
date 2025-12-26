@@ -253,9 +253,9 @@ $ satdeploy rollback controller
 ## Build Order
 
 ### Week 1
-- [ ] `satdeploy init` — Interactive config creation
-- [ ] `satdeploy push <app>` — Basic deploy (backup, copy, restart)
-- [ ] `satdeploy status` — Show service states
+- [x] `satdeploy init` — Interactive config creation
+- [x] `satdeploy push <app>` — Basic deploy (backup, copy, restart)
+- [x] `satdeploy status` — Show service states
 
 ### Week 2
 - [ ] `satdeploy rollback <app>` — Restore from backup
