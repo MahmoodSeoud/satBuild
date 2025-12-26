@@ -123,41 +123,36 @@ Start order: param_handler → csp_server → controller
 
 ```
 $ satdeploy status
-Target: 192.168.1.50 (root)
+Target: 100.114.151.102 (mseo)
 
     APP              STATUS        	VERSION
     --------------------------------------------------
-  ✓ controller       running       	20240115-143022
-  ✓ csp_server       running       	20240115-091544
-  • libparam         deployed      	20240110-120000
+  • test_app        deployed      	20251226-231009
+  • test_app2       stopped       	20251226-221252
 
-$ satdeploy push controller
-Connecting to 192.168.1.50...
-Deploying controller...
-[1/4] Backing up /opt/disco/bin/controller
-[2/4] Uploading ./build/controller → /opt/disco/bin/controller
-[3/4] Stopping controller (controller.service)
-[4/4] Starting controller (controller.service)
-✓ Health check passed for controller
-✓ Deployed controller (e5f6a7b1)
-
-$ satdeploy list controller
-Backups for controller:
+$ satdeploy list test_app
+Backups for test_app:
 
     VERSION            TIMESTAMP
     ----------------------------------------
-  → 20240115-150000  2024-01-15 15:00:00
-  • 20240115-143022  2024-01-15 14:30:22
-  • 20240114-091500  2024-01-14 09:15:00
+  → 20251226-231009  2025-12-26 23:10:09
+  • 20251226-225608  2025-12-26 22:56:08
+  • 20251226-175202  2025-12-26 17:52:02
 
-$ satdeploy rollback controller
-Connecting to 192.168.1.50...
-Rolling back controller...
-[1/3] Stopping controller (controller.service)
-[2/3] Restoring 20240115-143022
-[3/3] Starting controller (controller.service)
-✓ Health check passed for controller
-✓ Rolled back controller to 20240115-143022
+$ satdeploy logs test_app2 -n 10
+Logs for test_app2 (test_app2.service):
+
+Dec 26 22:15:05 mseo-pi systemd[1]: Started test_app2.service - Test App 2 for satdeploy.
+Dec 26 22:15:05 mseo-pi test_app2[23970]: Hello from test_app2 - VERSION 2!
+Dec 26 22:15:05 mseo-pi test_app2[23970]: This is the updated version
+Dec 26 22:15:05 mseo-pi test_app2[23971]: Fri 26 Dec 22:15:05 CET 2025
+Dec 26 22:15:05 mseo-pi systemd[1]: test_app2.service: Deactivated successfully.
+
+$ satdeploy rollback test_app
+Connecting to 100.114.151.102...
+Rolling back test_app...
+[1/1] Restoring 20251226-225608
+✓ Rolled back test_app to 20251226-225608
 ```
 
 ## Requirements
