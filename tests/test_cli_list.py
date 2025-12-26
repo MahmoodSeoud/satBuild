@@ -102,8 +102,9 @@ class TestListCommand:
         )
 
         assert result.exit_code == 0
-        assert "20240115-143022" in result.output
-        assert "20240114-091500" in result.output
+        # Check for human-readable timestamps (we no longer show raw version format)
+        assert "2024-01-15 14:30:22" in result.output
+        assert "2024-01-14 09:15:00" in result.output
 
     @patch("satdeploy.cli.SSHClient")
     def test_list_shows_timestamps(self, mock_ssh_class, tmp_path):

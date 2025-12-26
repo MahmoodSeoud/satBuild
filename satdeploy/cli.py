@@ -164,12 +164,15 @@ def push(app: str, local: str | None, config_dir: Path | None):
                 service_manager.stop(svc_name)
 
             # Backup and deploy
+            remote_target = f"{target['user']}@{target['host']}:{remote_path}"
+
             current_step += 1
-            click.echo(step(current_step, total_steps, f"Backing up {remote_path}"))
+            click.echo(step(current_step, total_steps, f"Backing up {remote_target}"))
             backup_path = deployer.backup(app, remote_path)
 
             current_step += 1
-            click.echo(step(current_step, total_steps, f"Uploading {local_path} {SYMBOLS['arrow']} {remote_path}"))
+            click.echo(step(current_step, total_steps, f"Uploading {local_path}"))
+            click.echo(f"                {SYMBOLS['arrow']} {remote_target}")
             deployer.deploy(local_path, remote_path)
             binary_hash = deployer.compute_hash(local_path)
 
@@ -237,9 +240,9 @@ def status(config_dir: Path | None):
         return
 
     # Print header
-    header = f"    {'APP':<16} {'STATUS':<14}\t{'VERSION'}"
+    header = f"    {'APP':<16} {'STATUS':<14}\t{'HASH'}"
     click.echo(click.style(header, fg="bright_black"))
-    click.echo(click.style("    " + "-" * 50, fg="bright_black"))
+    click.echo(click.style("    " + "-" * 45, fg="bright_black"))
 
     try:
         with SSHClient(host=target["host"], user=target["user"]) as ssh:
@@ -249,16 +252,25 @@ def status(config_dir: Path | None):
                 service = app_config.get("service")
                 remote_path = app_config.get("remote")
 
-                # Get version from history
+                # Get hash from history
                 last_deploy = history.get_last_deployment(app_name)
                 if last_deploy and last_deploy.success and last_deploy.backup_path:
-                    # Extract version from backup path (e.g., "20240115-143022" from ".../20240115-143022.bak")
-                    backup_filename = os.path.basename(last_deploy.backup_path)
-                    version_display = backup_filename.replace(".bak", "")
+                    # Extract hash from backup path (e.g., "abc123" from ".../20240115-143022-abc123.bak")
+                    backup_filename = os.path.basename(last_deploy.backup_path).replace(".bak", "")
+                    version_parts = backup_filename.split("-")
+                    hash_display = version_parts[2] if len(version_parts) >= 3 else "-"
                 else:
-                    version_display = "-"
+                    hash_display = "-"
 
-                if service:
+                # First check if file exists
+                deployed = ssh.file_exists(remote_path)
+
+                if not deployed:
+                    symbol = click.style(SYMBOLS["bullet"], fg="yellow")
+                    status_text = "not deployed"
+                    status_color = "yellow"
+                elif service:
+                    # File exists and has a service - check service status
                     svc_status = service_manager.get_status(service)
                     if svc_status == ServiceStatus.RUNNING:
                         symbol = click.style(SYMBOLS["check"], fg="green")
@@ -277,25 +289,20 @@ def status(config_dir: Path | None):
                         status_text = "unknown"
                         status_color = "white"
                 else:
-                    deployed = ssh.file_exists(remote_path)
-                    if deployed:
-                        symbol = click.style(SYMBOLS["bullet"], fg="green")
-                        status_text = "deployed"
-                        status_color = "green"
-                    else:
-                        symbol = click.style(SYMBOLS["bullet"], fg="yellow")
-                        status_text = "not deployed"
-                        status_color = "yellow"
+                    # File exists but no service (library)
+                    symbol = click.style(SYMBOLS["bullet"], fg="green")
+                    status_text = "deployed"
+                    status_color = "green"
 
                 # Pad plain text first, then colorize
                 name_col = f"{app_name:<16}"
                 status_col = f"{status_text:<14}"
-                version_col = version_display
+                hash_col = hash_display
 
                 click.echo(
                     f"  {symbol} {name_col}"
                     f"{click.style(status_col, fg=status_color)}\t"
-                    f"{click.style(version_col, fg='white')}"
+                    f"{click.style(hash_col, fg='white')}"
                 )
 
     except SSHError as e:
@@ -353,22 +360,24 @@ def list_backups(app: str, config_dir: Path | None):
             click.echo(click.style(f"Backups for {app}:", bold=True))
             click.echo("")
             # Print header
-            header = f"    {'VERSION':<18} {'TIMESTAMP'}"
+            header = f"    {'HASH':<10} {'TIMESTAMP'}"
             click.echo(click.style(header, fg="bright_black"))
-            click.echo(click.style("    " + "-" * 40, fg="bright_black"))
+            click.echo(click.style("    " + "-" * 30, fg="bright_black"))
             for backup in backups:
                 # Check if this is the currently deployed version
                 is_current = current_backup_path and backup["version"] in current_backup_path
 
+                hash_display = backup.get("hash") or "-"
+
                 if is_current:
                     bullet = click.style(SYMBOLS["arrow"], fg="green")
-                    version = click.style(backup["version"], fg="green")
+                    hash_col = click.style(f"{hash_display:<10}", fg="green")
                 else:
                     bullet = click.style(SYMBOLS["bullet"], fg="blue")
-                    version = click.style(backup["version"], fg="blue")
+                    hash_col = click.style(f"{hash_display:<10}", fg="blue")
 
                 timestamp = click.style(backup["timestamp"], fg="bright_black")
-                click.echo(f"  {bullet} {version}  {timestamp}")
+                click.echo(f"  {bullet} {hash_col}{timestamp}")
 
         except SSHError as e:
             raise click.ClickException(str(e))

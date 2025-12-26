@@ -125,19 +125,27 @@ Start order: param_handler → csp_server → controller
 $ satdeploy status
 Target: 100.114.151.102 (mseo)
 
-    APP              STATUS        	VERSION
-    --------------------------------------------------
-  • test_app        deployed      	20251226-231009
-  • test_app2       stopped       	20251226-221252
+    APP              STATUS        	HASH
+    ---------------------------------------------
+  • test_app        deployed      	42fb01da
+  • test_app2       stopped       	-
+
+$ satdeploy push test_app
+Connecting to 100.114.151.102...
+Deploying test_app...
+[1/2] Backing up mseo@100.114.151.102:/home/mseo/Disco/2025-12-26/test_app
+[2/2] Uploading /Users/mahmood/projects/test/build/test_app
+                → mseo@100.114.151.102:/home/mseo/Disco/2025-12-26/test_app
+▸ Deployed test_app (42fb01da)
 
 $ satdeploy list test_app
 Backups for test_app:
 
-    VERSION            TIMESTAMP
-    ----------------------------------------
-  → 20251226-231009  2025-12-26 23:10:09
-  • 20251226-225608  2025-12-26 22:56:08
-  • 20251226-175202  2025-12-26 17:52:02
+    HASH       TIMESTAMP
+    ------------------------------
+  → 42fb01da  2025-12-27 00:07:48
+  • -         2025-12-26 23:10:09
+  • -         2025-12-26 22:56:08
 
 $ satdeploy logs test_app2 -n 10
 Logs for test_app2 (test_app2.service):
@@ -152,7 +160,7 @@ $ satdeploy rollback test_app
 Connecting to 100.114.151.102...
 Rolling back test_app...
 [1/1] Restoring 20251226-225608
-✓ Rolled back test_app to 20251226-225608
+▸ Rolled back test_app to 20251226-225608
 ```
 
 ## Requirements
