@@ -8,6 +8,7 @@ import yaml
 from click.testing import CliRunner
 
 from satdeploy.cli import main
+from satdeploy.output import SYMBOLS
 from satdeploy.services import ServiceStatus
 
 
@@ -240,3 +241,118 @@ class TestStatusCommand:
 
         assert result.exit_code == 0
         assert "no apps" in result.output.lower()
+
+
+class TestStatusPolishedOutput:
+    """Tests for polished CLI output formatting."""
+
+    @patch("satdeploy.cli.SSHClient")
+    def test_status_running_shows_checkmark(self, mock_ssh_class, tmp_path):
+        """Status should show checkmark for running services."""
+        runner = CliRunner()
+        config_dir = tmp_path / ".satdeploy"
+        config_dir.mkdir()
+        config_file = config_dir / "config.yaml"
+        config_file.write_text(
+            yaml.dump(
+                {
+                    "target": {"host": "192.168.1.50", "user": "root"},
+                    "backup_dir": "/opt/satdeploy/backups",
+                    "apps": {
+                        "controller": {
+                            "local": "./build/controller",
+                            "remote": "/opt/disco/bin/controller",
+                            "service": "controller.service",
+                        },
+                    },
+                }
+            )
+        )
+
+        mock_ssh = MagicMock()
+        mock_ssh_class.return_value.__enter__ = Mock(return_value=mock_ssh)
+        mock_ssh_class.return_value.__exit__ = Mock(return_value=False)
+        mock_ssh.run.return_value = Mock(stdout="active\n", exit_code=0)
+
+        result = runner.invoke(
+            main,
+            ["status", "--config-dir", str(config_dir)],
+            color=True,
+        )
+
+        assert result.exit_code == 0
+        assert SYMBOLS["check"] in result.output
+
+    @patch("satdeploy.cli.SSHClient")
+    def test_status_failed_shows_cross(self, mock_ssh_class, tmp_path):
+        """Status should show cross for failed services."""
+        runner = CliRunner()
+        config_dir = tmp_path / ".satdeploy"
+        config_dir.mkdir()
+        config_file = config_dir / "config.yaml"
+        config_file.write_text(
+            yaml.dump(
+                {
+                    "target": {"host": "192.168.1.50", "user": "root"},
+                    "backup_dir": "/opt/satdeploy/backups",
+                    "apps": {
+                        "controller": {
+                            "local": "./build/controller",
+                            "remote": "/opt/disco/bin/controller",
+                            "service": "controller.service",
+                        },
+                    },
+                }
+            )
+        )
+
+        mock_ssh = MagicMock()
+        mock_ssh_class.return_value.__enter__ = Mock(return_value=mock_ssh)
+        mock_ssh_class.return_value.__exit__ = Mock(return_value=False)
+        mock_ssh.run.return_value = Mock(stdout="failed\n", exit_code=0)
+
+        result = runner.invoke(
+            main,
+            ["status", "--config-dir", str(config_dir)],
+            color=True,
+        )
+
+        assert result.exit_code == 0
+        assert SYMBOLS["cross"] in result.output
+
+    @patch("satdeploy.cli.SSHClient")
+    def test_status_uses_bullet_for_library(self, mock_ssh_class, tmp_path):
+        """Status should show bullet for libraries."""
+        runner = CliRunner()
+        config_dir = tmp_path / ".satdeploy"
+        config_dir.mkdir()
+        config_file = config_dir / "config.yaml"
+        config_file.write_text(
+            yaml.dump(
+                {
+                    "target": {"host": "192.168.1.50", "user": "root"},
+                    "backup_dir": "/opt/satdeploy/backups",
+                    "apps": {
+                        "libparam": {
+                            "local": "./build/libparam.so",
+                            "remote": "/usr/lib/libparam.so",
+                            "service": None,
+                        },
+                    },
+                }
+            )
+        )
+
+        mock_ssh = MagicMock()
+        mock_ssh_class.return_value.__enter__ = Mock(return_value=mock_ssh)
+        mock_ssh_class.return_value.__exit__ = Mock(return_value=False)
+        mock_ssh.file_exists.return_value = True
+
+        result = runner.invoke(
+            main,
+            ["status", "--config-dir", str(config_dir)],
+            color=True,
+        )
+
+        assert result.exit_code == 0
+        assert SYMBOLS["bullet"] in result.output

@@ -244,18 +244,27 @@ def status(config_dir: Path | None):
                 if service:
                     svc_status = service_manager.get_status(service)
                     if svc_status == ServiceStatus.RUNNING:
-                        status_str = "running"
+                        symbol = click.style(SYMBOLS["check"], fg="green")
+                        status_str = click.style("running", fg="green")
                     elif svc_status == ServiceStatus.STOPPED:
-                        status_str = "stopped"
+                        symbol = click.style(SYMBOLS["bullet"], fg="yellow")
+                        status_str = click.style("stopped", fg="yellow")
                     elif svc_status == ServiceStatus.FAILED:
-                        status_str = "failed"
+                        symbol = click.style(SYMBOLS["cross"], fg="red")
+                        status_str = click.style("failed", fg="red")
                     else:
+                        symbol = click.style(SYMBOLS["bullet"], fg="white")
                         status_str = "unknown"
-                    click.echo(f"  {app_name}: {status_str} ({service})")
+                    click.echo(f"  {symbol} {app_name}: {status_str} ({service})")
                 else:
                     deployed = ssh.file_exists(remote_path)
-                    status_str = "deployed" if deployed else "not deployed"
-                    click.echo(f"  {app_name}: {status_str} (library)")
+                    if deployed:
+                        symbol = click.style(SYMBOLS["bullet"], fg="green")
+                        status_str = click.style("deployed", fg="green")
+                    else:
+                        symbol = click.style(SYMBOLS["bullet"], fg="yellow")
+                        status_str = click.style("not deployed", fg="yellow")
+                    click.echo(f"  {symbol} {app_name}: {status_str} (library)")
 
     except SSHError as e:
         raise click.ClickException(str(e))
