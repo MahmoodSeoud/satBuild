@@ -440,3 +440,49 @@ class TestPushWithDependencies:
         output_lower = result.output.lower()
         assert "csp_server" in output_lower
         assert "controller" in output_lower
+
+    @patch("satdeploy.cli.SSHClient")
+    def test_push_handles_ssh_error_gracefully(self, mock_ssh_class, tmp_path):
+        """Push should show clean error message on SSH failure, not traceback."""
+        from satdeploy.ssh import SSHError
+
+        runner = CliRunner()
+        config_dir = tmp_path / ".satdeploy"
+        config_dir.mkdir()
+
+        binary = tmp_path / "controller"
+        binary.write_bytes(b"binary content")
+
+        config_file = config_dir / "config.yaml"
+        config_file.write_text(
+            yaml.dump(
+                {
+                    "target": {"host": "192.168.1.50", "user": "mseo"},
+                    "backup_dir": "/opt/satdeploy/backups",
+                    "apps": {
+                        "controller": {
+                            "local": str(binary),
+                            "remote": "/opt/disco/bin/controller",
+                            "service": None,
+                        }
+                    },
+                }
+            )
+        )
+
+        mock_ssh = MagicMock()
+        mock_ssh_class.return_value.__enter__ = Mock(return_value=mock_ssh)
+        mock_ssh_class.return_value.__exit__ = Mock(return_value=False)
+        mock_ssh.file_exists.return_value = False
+        # Simulate permission denied error
+        mock_ssh.run.side_effect = SSHError("mkdir: cannot create directory '/opt/satdeploy': Permission denied")
+
+        result = runner.invoke(
+            main,
+            ["push", "controller", "--config-dir", str(config_dir)],
+        )
+
+        # Should fail with clean error, not traceback
+        assert result.exit_code != 0
+        assert "permission denied" in result.output.lower()
+        assert "Traceback" not in result.output
