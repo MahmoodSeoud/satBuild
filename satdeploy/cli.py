@@ -388,3 +388,55 @@ def rollback(app: str, version: str | None, config_dir: Path | None):
 
         except SSHError as e:
             raise click.ClickException(str(e))
+
+
+@main.command()
+@click.argument("app")
+@click.option(
+    "--lines",
+    "-n",
+    type=int,
+    default=100,
+    help="Number of lines to show (default: 100)",
+)
+@click.option(
+    "--config-dir",
+    type=click.Path(path_type=Path),
+    default=None,
+    help="Config directory (default: ~/.satdeploy)",
+)
+def logs(app: str, lines: int, config_dir: Path | None):
+    """Show logs for an app's service.
+
+    APP is the name of the application to show logs for.
+    """
+    config_dir = config_dir or DEFAULT_CONFIG_DIR
+    config = Config(config_dir=config_dir)
+
+    if config.load() is None:
+        raise click.ClickException(
+            f"Config not found at {config.config_path}. Run 'satdeploy init' first."
+        )
+
+    app_config = config.get_app(app)
+    if app_config is None:
+        raise click.ClickException(
+            f"App '{app}' not found in config. Check your config.yaml."
+        )
+
+    service = app_config.get("service")
+    if not service:
+        raise click.ClickException(
+            f"App '{app}' is a library and has no service. Cannot show logs."
+        )
+
+    target = config.target
+
+    try:
+        with SSHClient(host=target["host"], user=target["user"]) as ssh:
+            service_manager = ServiceManager(ssh)
+            log_output = service_manager.get_logs(service, lines=lines)
+            click.echo(log_output)
+
+    except SSHError as e:
+        raise click.ClickException(str(e))
