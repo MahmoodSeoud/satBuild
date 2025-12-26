@@ -6,6 +6,7 @@ from pathlib import Path
 import click
 
 from satdeploy.config import DEFAULT_CONFIG_DIR, Config
+from satdeploy.dependencies import DependencyResolver
 from satdeploy.deployer import Deployer
 from satdeploy.services import ServiceManager, ServiceStatus
 from satdeploy.ssh import SSHClient
@@ -103,32 +104,61 @@ def push(app: str, local: str | None, config_dir: Path | None):
             max_backups=config.max_backups,
         )
 
+        # Resolve dependencies
+        resolver = DependencyResolver(config.apps)
+
+        # Check for cycles
+        if resolver.has_cycle():
+            raise click.ClickException("Cyclic dependency detected in config")
+
+        # For libraries with restart list, use that
+        restart_apps = resolver.get_restart_apps(app)
+        if restart_apps:
+            # Library with restart list
+            services_to_manage = []
+            for restart_app in restart_apps:
+                restart_config = config.get_app(restart_app)
+                if restart_config and restart_config.get("service"):
+                    services_to_manage.append(
+                        (restart_app, restart_config.get("service"))
+                    )
+        elif service:
+            # Service with dependencies
+            stop_order = resolver.get_stop_order(app)
+            services_to_manage = []
+            for dep_app in stop_order:
+                dep_config = config.get_app(dep_app)
+                if dep_config and dep_config.get("service"):
+                    services_to_manage.append(
+                        (dep_app, dep_config.get("service"))
+                    )
+        else:
+            services_to_manage = []
+
         click.echo(f"Deploying {app}...")
 
-        if service:
-            click.echo(f"  Stopping {service}...")
+        # Stop services in order
+        for svc_app, svc_name in services_to_manage:
+            click.echo(f"  Stopping {svc_app} ({svc_name})...")
+            service_manager.stop(svc_name)
 
-        result = deployer.push(
-            app_name=app,
-            local_path=local_path,
-            remote_path=remote_path,
-            service=service,
-            service_manager=service_manager,
-        )
-
-        if not result.success:
-            raise click.ClickException(f"Deployment failed: {result.error_message}")
+        # Backup and deploy
+        backup_path = deployer.backup(app, remote_path)
+        deployer.deploy(local_path, remote_path)
+        binary_hash = deployer.compute_hash(local_path)
 
         click.echo(f"  Uploaded {local_path} -> {remote_path}")
 
-        if service:
-            click.echo(f"  Starting {service}...")
-            if result.health_check_passed:
-                click.echo(f"  Health check passed")
+        # Start services in reverse order
+        for svc_app, svc_name in reversed(services_to_manage):
+            click.echo(f"  Starting {svc_app} ({svc_name})...")
+            service_manager.start(svc_name)
+            if service_manager.is_healthy(svc_name):
+                click.echo(f"  Health check passed for {svc_app}")
             else:
-                click.echo(f"  Warning: Health check failed")
+                click.echo(f"  Warning: Health check failed for {svc_app}")
 
-        click.echo(f"Successfully deployed {app} ({result.binary_hash})")
+        click.echo(f"Successfully deployed {app} ({binary_hash})")
 
 
 @main.command()
@@ -272,30 +302,73 @@ def rollback(app: str, version: str | None, config_dir: Path | None):
             max_backups=config.max_backups,
         )
 
+        # Resolve dependencies
+        resolver = DependencyResolver(config.apps)
+
+        # Check for cycles
+        if resolver.has_cycle():
+            raise click.ClickException("Cyclic dependency detected in config")
+
+        # For libraries with restart list, use that
+        restart_apps = resolver.get_restart_apps(app)
+        if restart_apps:
+            # Library with restart list
+            services_to_manage = []
+            for restart_app in restart_apps:
+                restart_config = config.get_app(restart_app)
+                if restart_config and restart_config.get("service"):
+                    services_to_manage.append(
+                        (restart_app, restart_config.get("service"))
+                    )
+        elif service:
+            # Service with dependencies
+            stop_order = resolver.get_stop_order(app)
+            services_to_manage = []
+            for dep_app in stop_order:
+                dep_config = config.get_app(dep_app)
+                if dep_config and dep_config.get("service"):
+                    services_to_manage.append(
+                        (dep_app, dep_config.get("service"))
+                    )
+        else:
+            services_to_manage = []
+
         click.echo(f"Rolling back {app}...")
 
-        if service:
-            click.echo(f"  Stopping {service}...")
+        # Stop services in order
+        for svc_app, svc_name in services_to_manage:
+            click.echo(f"  Stopping {svc_app} ({svc_name})...")
+            service_manager.stop(svc_name)
 
-        result = deployer.rollback(
-            app_name=app,
-            remote_path=remote_path,
-            service=service,
-            service_manager=service_manager,
-            version=version,
-        )
+        # Get backup list and find the right one
+        backups = deployer.list_backups(app)
+        if not backups:
+            raise click.ClickException("No backups available for rollback")
 
-        if not result.success:
-            raise click.ClickException(f"Rollback failed: {result.error_message}")
+        if version:
+            matching = [b for b in backups if b["version"] == version]
+            if not matching:
+                raise click.ClickException(f"Version {version} not found")
+            backup = matching[0]
+        else:
+            backup = backups[0]
 
-        version_str = result.backup_path.split("/")[-1].replace(".bak", "")
+        backup_path = backup["path"]
+        version_str = backup["version"]
+
+        # Restore the backup
+        ssh.run(f"cp '{backup_path}' '{remote_path}'")
+        ssh.run(f"chmod +x '{remote_path}'")
+
         click.echo(f"  Restored {version_str}")
 
-        if service:
-            click.echo(f"  Starting {service}...")
-            if result.health_check_passed:
-                click.echo(f"  Health check passed")
+        # Start services in reverse order
+        for svc_app, svc_name in reversed(services_to_manage):
+            click.echo(f"  Starting {svc_app} ({svc_name})...")
+            service_manager.start(svc_name)
+            if service_manager.is_healthy(svc_name):
+                click.echo(f"  Health check passed for {svc_app}")
             else:
-                click.echo(f"  Warning: Health check failed")
+                click.echo(f"  Warning: Health check failed for {svc_app}")
 
         click.echo(f"Successfully rolled back {app} to {version_str}")

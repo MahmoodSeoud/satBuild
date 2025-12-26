@@ -256,3 +256,53 @@ class TestRollbackCommand:
 
         assert result.exit_code == 0
         assert "health check" in result.output.lower()
+
+
+class TestRollbackWithDependencies:
+    """Test rollback with dependency-aware service management."""
+
+    @patch("satdeploy.cli.SSHClient")
+    def test_rollback_stops_dependents_first(self, mock_ssh_class, tmp_path):
+        """Rollback should stop dependent services before the target."""
+        runner = CliRunner()
+        config_dir = tmp_path / ".satdeploy"
+        config_dir.mkdir()
+        config_file = config_dir / "config.yaml"
+        config_file.write_text(
+            yaml.dump(
+                {
+                    "target": {"host": "192.168.1.50", "user": "root"},
+                    "backup_dir": "/opt/satdeploy/backups",
+                    "apps": {
+                        "controller": {
+                            "local": "./build/controller",
+                            "remote": "/opt/disco/bin/controller",
+                            "service": "controller.service",
+                            "depends_on": ["csp_server"],
+                        },
+                        "csp_server": {
+                            "local": "./build/csp_server",
+                            "remote": "/usr/bin/csp_server",
+                            "service": "csp_server.service",
+                        },
+                    },
+                }
+            )
+        )
+
+        mock_ssh = MagicMock()
+        mock_ssh_class.return_value.__enter__ = Mock(return_value=mock_ssh)
+        mock_ssh_class.return_value.__exit__ = Mock(return_value=False)
+        mock_ssh.run.return_value = Mock(
+            stdout="20240115-143022.bak\n",
+            exit_code=0,
+        )
+
+        result = runner.invoke(
+            main,
+            ["rollback", "csp_server", "--config-dir", str(config_dir)],
+        )
+
+        assert result.exit_code == 0
+        # Should mention stopping controller (the dependent)
+        assert "controller" in result.output.lower()
