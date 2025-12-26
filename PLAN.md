@@ -258,9 +258,9 @@ $ satdeploy rollback controller
 - [x] `satdeploy status` — Show service states
 
 ### Week 2
-- [ ] `satdeploy rollback <app>` — Restore from backup
-- [ ] `satdeploy list <app>` — Show version history
-- [ ] Dependency resolution (stop/start order)
+- [x] `satdeploy rollback <app>` — Restore from backup
+- [x] `satdeploy list <app>` — Show version history
+- [x] Dependency resolution (stop/start order)
 
 ### Week 3
 - [ ] `satdeploy logs <app>` — Tail journalctl

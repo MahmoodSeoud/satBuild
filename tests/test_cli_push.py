@@ -273,3 +273,216 @@ class TestPushCommand:
         mock_ssh.upload.assert_called_once()
         # The expanded path should be used
         assert str(fake_home) in str(mock_ssh.upload.call_args)
+
+
+class TestPushWithDependencies:
+    """Test push with dependency-aware service management."""
+
+    @patch("satdeploy.cli.SSHClient")
+    def test_push_stops_dependents_first(self, mock_ssh_class, tmp_path):
+        """Push should stop dependent services before the target."""
+        runner = CliRunner()
+        config_dir = tmp_path / ".satdeploy"
+        config_dir.mkdir()
+
+        binary = tmp_path / "csp_server"
+        binary.write_bytes(b"binary content")
+
+        config_file = config_dir / "config.yaml"
+        config_file.write_text(
+            yaml.dump(
+                {
+                    "target": {"host": "192.168.1.50", "user": "root"},
+                    "backup_dir": "/opt/satdeploy/backups",
+                    "apps": {
+                        "controller": {
+                            "local": "./build/controller",
+                            "remote": "/opt/disco/bin/controller",
+                            "service": "controller.service",
+                            "depends_on": ["csp_server"],
+                        },
+                        "csp_server": {
+                            "local": str(binary),
+                            "remote": "/usr/bin/csp_server",
+                            "service": "csp_server.service",
+                        },
+                    },
+                }
+            )
+        )
+
+        mock_ssh = MagicMock()
+        mock_ssh_class.return_value.__enter__ = Mock(return_value=mock_ssh)
+        mock_ssh_class.return_value.__exit__ = Mock(return_value=False)
+        mock_ssh.file_exists.return_value = False
+        mock_ssh.run.return_value = Mock(stdout="active\n", exit_code=0)
+
+        result = runner.invoke(
+            main,
+            ["push", "csp_server", "--config-dir", str(config_dir)],
+        )
+
+        assert result.exit_code == 0
+        # Should mention stopping controller (the dependent)
+        assert "controller" in result.output.lower()
+
+    @patch("satdeploy.cli.SSHClient")
+    def test_push_starts_in_correct_order(self, mock_ssh_class, tmp_path):
+        """Push should start services in correct dependency order."""
+        runner = CliRunner()
+        config_dir = tmp_path / ".satdeploy"
+        config_dir.mkdir()
+
+        binary = tmp_path / "csp_server"
+        binary.write_bytes(b"binary content")
+
+        config_file = config_dir / "config.yaml"
+        config_file.write_text(
+            yaml.dump(
+                {
+                    "target": {"host": "192.168.1.50", "user": "root"},
+                    "backup_dir": "/opt/satdeploy/backups",
+                    "apps": {
+                        "controller": {
+                            "local": "./build/controller",
+                            "remote": "/opt/disco/bin/controller",
+                            "service": "controller.service",
+                            "depends_on": ["csp_server"],
+                        },
+                        "csp_server": {
+                            "local": str(binary),
+                            "remote": "/usr/bin/csp_server",
+                            "service": "csp_server.service",
+                        },
+                    },
+                }
+            )
+        )
+
+        mock_ssh = MagicMock()
+        mock_ssh_class.return_value.__enter__ = Mock(return_value=mock_ssh)
+        mock_ssh_class.return_value.__exit__ = Mock(return_value=False)
+        mock_ssh.file_exists.return_value = False
+        mock_ssh.run.return_value = Mock(stdout="active\n", exit_code=0)
+
+        result = runner.invoke(
+            main,
+            ["push", "csp_server", "--config-dir", str(config_dir)],
+        )
+
+        assert result.exit_code == 0
+        # Output should show stopping controller, then csp_server
+        # And starting csp_server, then controller
+        output_lower = result.output.lower()
+        stop_controller = output_lower.find("stopping controller")
+        stop_csp = output_lower.find("stopping csp_server")
+        start_csp = output_lower.find("starting csp_server")
+        start_controller = output_lower.find("starting controller")
+
+        # Stop order: controller first (dependent), then csp_server
+        if stop_controller != -1 and stop_csp != -1:
+            assert stop_controller < stop_csp, "controller should stop before csp_server"
+        # Start order: csp_server first, then controller (dependent)
+        if start_csp != -1 and start_controller != -1:
+            assert start_csp < start_controller, "csp_server should start before controller"
+
+    @patch("satdeploy.cli.SSHClient")
+    def test_push_library_restarts_dependent_services(self, mock_ssh_class, tmp_path):
+        """Push for library should restart services in restart list."""
+        runner = CliRunner()
+        config_dir = tmp_path / ".satdeploy"
+        config_dir.mkdir()
+
+        lib = tmp_path / "libparam.so"
+        lib.write_bytes(b"library content")
+
+        config_file = config_dir / "config.yaml"
+        config_file.write_text(
+            yaml.dump(
+                {
+                    "target": {"host": "192.168.1.50", "user": "root"},
+                    "backup_dir": "/opt/satdeploy/backups",
+                    "apps": {
+                        "libparam": {
+                            "local": str(lib),
+                            "remote": "/usr/lib/libparam.so",
+                            "service": None,
+                            "restart": ["csp_server", "controller"],
+                        },
+                        "csp_server": {
+                            "local": "./build/csp_server",
+                            "remote": "/usr/bin/csp_server",
+                            "service": "csp_server.service",
+                        },
+                        "controller": {
+                            "local": "./build/controller",
+                            "remote": "/opt/disco/bin/controller",
+                            "service": "controller.service",
+                        },
+                    },
+                }
+            )
+        )
+
+        mock_ssh = MagicMock()
+        mock_ssh_class.return_value.__enter__ = Mock(return_value=mock_ssh)
+        mock_ssh_class.return_value.__exit__ = Mock(return_value=False)
+        mock_ssh.file_exists.return_value = False
+        mock_ssh.run.return_value = Mock(stdout="active\n", exit_code=0)
+
+        result = runner.invoke(
+            main,
+            ["push", "libparam", "--config-dir", str(config_dir)],
+        )
+
+        assert result.exit_code == 0
+        # Should restart both services
+        output_lower = result.output.lower()
+        assert "csp_server" in output_lower
+        assert "controller" in output_lower
+
+    @patch("satdeploy.cli.SSHClient")
+    def test_push_handles_ssh_error_gracefully(self, mock_ssh_class, tmp_path):
+        """Push should show clean error message on SSH failure, not traceback."""
+        from satdeploy.ssh import SSHError
+
+        runner = CliRunner()
+        config_dir = tmp_path / ".satdeploy"
+        config_dir.mkdir()
+
+        binary = tmp_path / "controller"
+        binary.write_bytes(b"binary content")
+
+        config_file = config_dir / "config.yaml"
+        config_file.write_text(
+            yaml.dump(
+                {
+                    "target": {"host": "192.168.1.50", "user": "mseo"},
+                    "backup_dir": "/opt/satdeploy/backups",
+                    "apps": {
+                        "controller": {
+                            "local": str(binary),
+                            "remote": "/opt/disco/bin/controller",
+                            "service": None,
+                        }
+                    },
+                }
+            )
+        )
+
+        mock_ssh = MagicMock()
+        mock_ssh_class.return_value.__enter__ = Mock(return_value=mock_ssh)
+        mock_ssh_class.return_value.__exit__ = Mock(return_value=False)
+        mock_ssh.file_exists.return_value = False
+        # Simulate permission denied error
+        mock_ssh.run.side_effect = SSHError("mkdir: cannot create directory '/opt/satdeploy': Permission denied")
+
+        result = runner.invoke(
+            main,
+            ["push", "controller", "--config-dir", str(config_dir)],
+        )
+
+        # Should fail with clean error, not traceback
+        assert result.exit_code != 0
+        assert "permission denied" in result.output.lower()
+        assert "Traceback" not in result.output

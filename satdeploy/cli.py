@@ -6,9 +6,10 @@ from pathlib import Path
 import click
 
 from satdeploy.config import DEFAULT_CONFIG_DIR, Config
+from satdeploy.dependencies import DependencyResolver
 from satdeploy.deployer import Deployer
 from satdeploy.services import ServiceManager, ServiceStatus
-from satdeploy.ssh import SSHClient
+from satdeploy.ssh import SSHClient, SSHError
 
 
 @click.group()
@@ -103,32 +104,65 @@ def push(app: str, local: str | None, config_dir: Path | None):
             max_backups=config.max_backups,
         )
 
+        # Resolve dependencies
+        resolver = DependencyResolver(config.apps)
+
+        # Check for cycles
+        if resolver.has_cycle():
+            raise click.ClickException("Cyclic dependency detected in config")
+
+        # For libraries with restart list, use that
+        restart_apps = resolver.get_restart_apps(app)
+        if restart_apps:
+            # Library with restart list
+            services_to_manage = []
+            for restart_app in restart_apps:
+                restart_config = config.get_app(restart_app)
+                if restart_config and restart_config.get("service"):
+                    services_to_manage.append(
+                        (restart_app, restart_config.get("service"))
+                    )
+        elif service:
+            # Service with dependencies
+            stop_order = resolver.get_stop_order(app)
+            services_to_manage = []
+            for dep_app in stop_order:
+                dep_config = config.get_app(dep_app)
+                if dep_config and dep_config.get("service"):
+                    services_to_manage.append(
+                        (dep_app, dep_config.get("service"))
+                    )
+        else:
+            services_to_manage = []
+
         click.echo(f"Deploying {app}...")
 
-        if service:
-            click.echo(f"  Stopping {service}...")
+        try:
+            # Stop services in order
+            for svc_app, svc_name in services_to_manage:
+                click.echo(f"  Stopping {svc_app} ({svc_name})...")
+                service_manager.stop(svc_name)
 
-        result = deployer.push(
-            app_name=app,
-            local_path=local_path,
-            remote_path=remote_path,
-            service=service,
-            service_manager=service_manager,
-        )
+            # Backup and deploy
+            backup_path = deployer.backup(app, remote_path)
+            deployer.deploy(local_path, remote_path)
+            binary_hash = deployer.compute_hash(local_path)
 
-        if not result.success:
-            raise click.ClickException(f"Deployment failed: {result.error_message}")
+            click.echo(f"  Uploaded {local_path} -> {remote_path}")
 
-        click.echo(f"  Uploaded {local_path} -> {remote_path}")
+            # Start services in reverse order
+            for svc_app, svc_name in reversed(services_to_manage):
+                click.echo(f"  Starting {svc_app} ({svc_name})...")
+                service_manager.start(svc_name)
+                if service_manager.is_healthy(svc_name):
+                    click.echo(f"  Health check passed for {svc_app}")
+                else:
+                    click.echo(f"  Warning: Health check failed for {svc_app}")
 
-        if service:
-            click.echo(f"  Starting {service}...")
-            if result.health_check_passed:
-                click.echo(f"  Health check passed")
-            else:
-                click.echo(f"  Warning: Health check failed")
+            click.echo(f"Successfully deployed {app} ({binary_hash})")
 
-        click.echo(f"Successfully deployed {app} ({result.binary_hash})")
+        except SSHError as e:
+            raise click.ClickException(str(e))
 
 
 @main.command()
@@ -158,25 +192,199 @@ def status(config_dir: Path | None):
         click.echo("No apps configured.")
         return
 
+    try:
+        with SSHClient(host=target["host"], user=target["user"]) as ssh:
+            service_manager = ServiceManager(ssh)
+
+            for app_name, app_config in apps.items():
+                service = app_config.get("service")
+                remote_path = app_config.get("remote")
+
+                if service:
+                    svc_status = service_manager.get_status(service)
+                    if svc_status == ServiceStatus.RUNNING:
+                        status_str = "running"
+                    elif svc_status == ServiceStatus.STOPPED:
+                        status_str = "stopped"
+                    elif svc_status == ServiceStatus.FAILED:
+                        status_str = "failed"
+                    else:
+                        status_str = "unknown"
+                    click.echo(f"  {app_name}: {status_str} ({service})")
+                else:
+                    deployed = ssh.file_exists(remote_path)
+                    status_str = "deployed" if deployed else "not deployed"
+                    click.echo(f"  {app_name}: {status_str} (library)")
+
+    except SSHError as e:
+        raise click.ClickException(str(e))
+
+
+@main.command("list")
+@click.argument("app")
+@click.option(
+    "--config-dir",
+    type=click.Path(path_type=Path),
+    default=None,
+    help="Config directory (default: ~/.satdeploy)",
+)
+def list_backups(app: str, config_dir: Path | None):
+    """Show available backups for an app.
+
+    APP is the name of the application to list backups for.
+    """
+    config_dir = config_dir or DEFAULT_CONFIG_DIR
+    config = Config(config_dir=config_dir)
+
+    if config.load() is None:
+        raise click.ClickException(
+            f"Config not found at {config.config_path}. Run 'satdeploy init' first."
+        )
+
+    app_config = config.get_app(app)
+    if app_config is None:
+        raise click.ClickException(
+            f"App '{app}' not found in config. Check your config.yaml."
+        )
+
+    target = config.target
+
+    with SSHClient(host=target["host"], user=target["user"]) as ssh:
+        deployer = Deployer(
+            ssh=ssh,
+            backup_dir=config.backup_dir,
+            max_backups=config.max_backups,
+        )
+
+        try:
+            backups = deployer.list_backups(app)
+
+            if not backups:
+                click.echo(f"No backups found for {app}.")
+                return
+
+            click.echo(f"{'VERSION':<25} {'TIMESTAMP':<20}")
+            for backup in backups:
+                click.echo(f"{backup['version']:<25} {backup['timestamp']:<20}")
+
+        except SSHError as e:
+            raise click.ClickException(str(e))
+
+
+@main.command()
+@click.argument("app")
+@click.argument("version", required=False, default=None)
+@click.option(
+    "--config-dir",
+    type=click.Path(path_type=Path),
+    default=None,
+    help="Config directory (default: ~/.satdeploy)",
+)
+def rollback(app: str, version: str | None, config_dir: Path | None):
+    """Rollback to a previous version.
+
+    APP is the name of the application to rollback.
+    VERSION is the optional backup version to restore (defaults to latest).
+    """
+    config_dir = config_dir or DEFAULT_CONFIG_DIR
+    config = Config(config_dir=config_dir)
+
+    if config.load() is None:
+        raise click.ClickException(
+            f"Config not found at {config.config_path}. Run 'satdeploy init' first."
+        )
+
+    app_config = config.get_app(app)
+    if app_config is None:
+        raise click.ClickException(
+            f"App '{app}' not found in config. Check your config.yaml."
+        )
+
+    remote_path = app_config.get("remote")
+    service = app_config.get("service")
+    target = config.target
+
+    click.echo(f"Connecting to {target['host']}...")
+
     with SSHClient(host=target["host"], user=target["user"]) as ssh:
         service_manager = ServiceManager(ssh)
+        deployer = Deployer(
+            ssh=ssh,
+            backup_dir=config.backup_dir,
+            max_backups=config.max_backups,
+        )
 
-        for app_name, app_config in apps.items():
-            service = app_config.get("service")
-            remote_path = app_config.get("remote")
+        # Resolve dependencies
+        resolver = DependencyResolver(config.apps)
 
-            if service:
-                svc_status = service_manager.get_status(service)
-                if svc_status == ServiceStatus.RUNNING:
-                    status_str = "running"
-                elif svc_status == ServiceStatus.STOPPED:
-                    status_str = "stopped"
-                elif svc_status == ServiceStatus.FAILED:
-                    status_str = "failed"
-                else:
-                    status_str = "unknown"
-                click.echo(f"  {app_name}: {status_str} ({service})")
+        # Check for cycles
+        if resolver.has_cycle():
+            raise click.ClickException("Cyclic dependency detected in config")
+
+        # For libraries with restart list, use that
+        restart_apps = resolver.get_restart_apps(app)
+        if restart_apps:
+            # Library with restart list
+            services_to_manage = []
+            for restart_app in restart_apps:
+                restart_config = config.get_app(restart_app)
+                if restart_config and restart_config.get("service"):
+                    services_to_manage.append(
+                        (restart_app, restart_config.get("service"))
+                    )
+        elif service:
+            # Service with dependencies
+            stop_order = resolver.get_stop_order(app)
+            services_to_manage = []
+            for dep_app in stop_order:
+                dep_config = config.get_app(dep_app)
+                if dep_config and dep_config.get("service"):
+                    services_to_manage.append(
+                        (dep_app, dep_config.get("service"))
+                    )
+        else:
+            services_to_manage = []
+
+        click.echo(f"Rolling back {app}...")
+
+        try:
+            # Stop services in order
+            for svc_app, svc_name in services_to_manage:
+                click.echo(f"  Stopping {svc_app} ({svc_name})...")
+                service_manager.stop(svc_name)
+
+            # Get backup list and find the right one
+            backups = deployer.list_backups(app)
+            if not backups:
+                raise click.ClickException("No backups available for rollback")
+
+            if version:
+                matching = [b for b in backups if b["version"] == version]
+                if not matching:
+                    raise click.ClickException(f"Version {version} not found")
+                backup = matching[0]
             else:
-                deployed = ssh.file_exists(remote_path)
-                status_str = "deployed" if deployed else "not deployed"
-                click.echo(f"  {app_name}: {status_str} (library)")
+                backup = backups[0]
+
+            backup_path = backup["path"]
+            version_str = backup["version"]
+
+            # Restore the backup
+            ssh.run(f"cp '{backup_path}' '{remote_path}'")
+            ssh.run(f"chmod +x '{remote_path}'")
+
+            click.echo(f"  Restored {version_str}")
+
+            # Start services in reverse order
+            for svc_app, svc_name in reversed(services_to_manage):
+                click.echo(f"  Starting {svc_app} ({svc_name})...")
+                service_manager.start(svc_name)
+                if service_manager.is_healthy(svc_name):
+                    click.echo(f"  Health check passed for {svc_app}")
+                else:
+                    click.echo(f"  Warning: Health check failed for {svc_app}")
+
+            click.echo(f"Successfully rolled back {app} to {version_str}")
+
+        except SSHError as e:
+            raise click.ClickException(str(e))

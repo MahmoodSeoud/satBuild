@@ -10,6 +10,15 @@ if TYPE_CHECKING:
     from satdeploy.ssh import SSHClient
 
 
+def parse_backup_timestamp(version: str) -> str:
+    """Parse version string (YYYYMMDD-HHMMSS) to human-readable timestamp."""
+    try:
+        dt = datetime.strptime(version, "%Y%m%d-%H%M%S")
+        return dt.strftime("%Y-%m-%d %H:%M:%S")
+    except ValueError:
+        return version
+
+
 @dataclass
 class DeployResult:
     """Result of a deployment operation."""
@@ -49,6 +58,33 @@ class Deployer:
             for chunk in iter(lambda: f.read(8192), b""):
                 sha256.update(chunk)
         return sha256.hexdigest()[:8]
+
+    def list_backups(self, app_name: str) -> list[dict]:
+        """List available backups for an app.
+
+        Args:
+            app_name: The application name.
+
+        Returns:
+            List of backup info dicts with keys: version, timestamp, path.
+            Sorted by version (newest first).
+        """
+        backup_dir = f"{self._backup_dir}/{app_name}"
+        result = self._ssh.run(f"ls '{backup_dir}' 2>/dev/null || true", check=False)
+
+        backups = []
+        for line in result.stdout.strip().split("\n"):
+            if not line or not line.endswith(".bak"):
+                continue
+            version = line.replace(".bak", "")
+            backups.append({
+                "version": version,
+                "timestamp": parse_backup_timestamp(version),
+                "path": f"{backup_dir}/{line}",
+            })
+
+        backups.sort(key=lambda b: b["version"], reverse=True)
+        return backups
 
     def backup(self, app_name: str, remote_path: str) -> Optional[str]:
         """Create a backup of the current remote binary.
@@ -134,6 +170,75 @@ class Deployer:
                 success=True,
                 app_name=app_name,
                 binary_hash=binary_hash,
+                backup_path=backup_path,
+                health_check_passed=health_check_passed,
+            )
+
+        except Exception as e:
+            return DeployResult(
+                success=False,
+                app_name=app_name,
+                error_message=str(e),
+            )
+
+    def rollback(
+        self,
+        app_name: str,
+        remote_path: str,
+        service: Optional[str],
+        service_manager: "ServiceManager",
+        version: Optional[str] = None,
+    ) -> DeployResult:
+        """Rollback to a previous version.
+
+        Args:
+            app_name: The application name.
+            remote_path: Path on the remote host.
+            service: The systemd service name, or None for libraries.
+            service_manager: The service manager instance.
+            version: Specific version to restore, or None for most recent.
+
+        Returns:
+            DeployResult with success status and metadata.
+        """
+        try:
+            backups = self.list_backups(app_name)
+
+            if not backups:
+                return DeployResult(
+                    success=False,
+                    app_name=app_name,
+                    error_message="No backups available for rollback",
+                )
+
+            if version:
+                matching = [b for b in backups if b["version"] == version]
+                if not matching:
+                    return DeployResult(
+                        success=False,
+                        app_name=app_name,
+                        error_message=f"Version {version} not found",
+                    )
+                backup = matching[0]
+            else:
+                backup = backups[0]
+
+            backup_path = backup["path"]
+
+            if service:
+                service_manager.stop(service)
+
+            self._ssh.run(f"cp '{backup_path}' '{remote_path}'")
+            self._ssh.run(f"chmod +x '{remote_path}'")
+
+            health_check_passed = None
+            if service:
+                service_manager.start(service)
+                health_check_passed = service_manager.is_healthy(service)
+
+            return DeployResult(
+                success=True,
+                app_name=app_name,
                 backup_path=backup_path,
                 health_check_passed=health_check_passed,
             )

@@ -367,3 +367,352 @@ class TestPush:
         mock_services.stop.assert_not_called()
         mock_services.start.assert_not_called()
         assert result.success is True
+
+
+class TestListBackups:
+    """Test listing remote backups."""
+
+    def test_list_backups_returns_list(self):
+        """list_backups should return a list of backup info."""
+        mock_ssh = Mock()
+        mock_ssh.run.return_value = Mock(
+            stdout="20240115-143022.bak\n20240114-091500.bak\n",
+            exit_code=0,
+        )
+
+        deployer = Deployer(
+            ssh=mock_ssh,
+            backup_dir="/opt/satdeploy/backups",
+            max_backups=10,
+        )
+        backups = deployer.list_backups("controller")
+
+        assert isinstance(backups, list)
+        assert len(backups) == 2
+
+    def test_list_backups_returns_empty_list_when_no_backups(self):
+        """list_backups should return empty list if no backups exist."""
+        mock_ssh = Mock()
+        mock_ssh.run.return_value = Mock(stdout="", exit_code=0)
+
+        deployer = Deployer(
+            ssh=mock_ssh,
+            backup_dir="/opt/satdeploy/backups",
+            max_backups=10,
+        )
+        backups = deployer.list_backups("controller")
+
+        assert backups == []
+
+    def test_list_backups_parses_timestamp(self):
+        """list_backups should parse timestamp from backup filename."""
+        mock_ssh = Mock()
+        mock_ssh.run.return_value = Mock(
+            stdout="20240115-143022.bak\n",
+            exit_code=0,
+        )
+
+        deployer = Deployer(
+            ssh=mock_ssh,
+            backup_dir="/opt/satdeploy/backups",
+            max_backups=10,
+        )
+        backups = deployer.list_backups("controller")
+
+        assert backups[0]["version"] == "20240115-143022"
+        assert backups[0]["timestamp"] == "2024-01-15 14:30:22"
+
+    def test_list_backups_sorted_newest_first(self):
+        """list_backups should return backups sorted newest first."""
+        mock_ssh = Mock()
+        mock_ssh.run.return_value = Mock(
+            stdout="20240114-091500.bak\n20240115-143022.bak\n20240113-160000.bak\n",
+            exit_code=0,
+        )
+
+        deployer = Deployer(
+            ssh=mock_ssh,
+            backup_dir="/opt/satdeploy/backups",
+            max_backups=10,
+        )
+        backups = deployer.list_backups("controller")
+
+        assert backups[0]["version"] == "20240115-143022"
+        assert backups[1]["version"] == "20240114-091500"
+        assert backups[2]["version"] == "20240113-160000"
+
+    def test_list_backups_includes_full_path(self):
+        """list_backups should include full path to backup file."""
+        mock_ssh = Mock()
+        mock_ssh.run.return_value = Mock(
+            stdout="20240115-143022.bak\n",
+            exit_code=0,
+        )
+
+        deployer = Deployer(
+            ssh=mock_ssh,
+            backup_dir="/opt/satdeploy/backups",
+            max_backups=10,
+        )
+        backups = deployer.list_backups("controller")
+
+        assert backups[0]["path"] == "/opt/satdeploy/backups/controller/20240115-143022.bak"
+
+
+class TestRollback:
+    """Test rollback functionality."""
+
+    def test_rollback_returns_deploy_result(self):
+        """rollback should return a DeployResult."""
+        mock_ssh = Mock()
+        mock_ssh.run.return_value = Mock(
+            stdout="20240115-143022.bak\n",
+            exit_code=0,
+        )
+
+        mock_services = Mock()
+        mock_services.is_healthy.return_value = True
+
+        deployer = Deployer(
+            ssh=mock_ssh,
+            backup_dir="/opt/satdeploy/backups",
+            max_backups=10,
+        )
+        result = deployer.rollback(
+            app_name="controller",
+            remote_path="/opt/disco/bin/controller",
+            service="controller.service",
+            service_manager=mock_services,
+        )
+
+        assert isinstance(result, DeployResult)
+
+    def test_rollback_restores_most_recent_backup(self):
+        """rollback should restore the most recent backup by default."""
+        mock_ssh = Mock()
+        mock_ssh.run.return_value = Mock(
+            stdout="20240114-091500.bak\n20240115-143022.bak\n",
+            exit_code=0,
+        )
+
+        mock_services = Mock()
+        mock_services.is_healthy.return_value = True
+
+        deployer = Deployer(
+            ssh=mock_ssh,
+            backup_dir="/opt/satdeploy/backups",
+            max_backups=10,
+        )
+        deployer.rollback(
+            app_name="controller",
+            remote_path="/opt/disco/bin/controller",
+            service="controller.service",
+            service_manager=mock_services,
+        )
+
+        # Should copy the newest backup (sorted newest first)
+        cp_calls = [c for c in mock_ssh.run.call_args_list if "cp" in str(c)]
+        assert len(cp_calls) > 0
+        assert "20240115-143022.bak" in str(cp_calls[-1])
+
+    def test_rollback_restores_specific_version(self):
+        """rollback should restore specific version when provided."""
+        mock_ssh = Mock()
+        mock_ssh.run.return_value = Mock(
+            stdout="20240114-091500.bak\n20240115-143022.bak\n",
+            exit_code=0,
+        )
+
+        mock_services = Mock()
+        mock_services.is_healthy.return_value = True
+
+        deployer = Deployer(
+            ssh=mock_ssh,
+            backup_dir="/opt/satdeploy/backups",
+            max_backups=10,
+        )
+        deployer.rollback(
+            app_name="controller",
+            remote_path="/opt/disco/bin/controller",
+            service="controller.service",
+            service_manager=mock_services,
+            version="20240114-091500",
+        )
+
+        cp_calls = [c for c in mock_ssh.run.call_args_list if "cp" in str(c)]
+        assert "20240114-091500.bak" in str(cp_calls[-1])
+
+    def test_rollback_stops_service_before_restore(self):
+        """rollback should stop the service before restoring."""
+        mock_ssh = Mock()
+        mock_ssh.run.return_value = Mock(
+            stdout="20240115-143022.bak\n",
+            exit_code=0,
+        )
+
+        mock_services = Mock()
+        mock_services.is_healthy.return_value = True
+
+        deployer = Deployer(
+            ssh=mock_ssh,
+            backup_dir="/opt/satdeploy/backups",
+            max_backups=10,
+        )
+        deployer.rollback(
+            app_name="controller",
+            remote_path="/opt/disco/bin/controller",
+            service="controller.service",
+            service_manager=mock_services,
+        )
+
+        mock_services.stop.assert_called_with("controller.service")
+
+    def test_rollback_starts_service_after_restore(self):
+        """rollback should start the service after restoring."""
+        mock_ssh = Mock()
+        mock_ssh.run.return_value = Mock(
+            stdout="20240115-143022.bak\n",
+            exit_code=0,
+        )
+
+        mock_services = Mock()
+        mock_services.is_healthy.return_value = True
+
+        deployer = Deployer(
+            ssh=mock_ssh,
+            backup_dir="/opt/satdeploy/backups",
+            max_backups=10,
+        )
+        deployer.rollback(
+            app_name="controller",
+            remote_path="/opt/disco/bin/controller",
+            service="controller.service",
+            service_manager=mock_services,
+        )
+
+        mock_services.start.assert_called_with("controller.service")
+
+    def test_rollback_performs_health_check(self):
+        """rollback should perform health check after starting service."""
+        mock_ssh = Mock()
+        mock_ssh.run.return_value = Mock(
+            stdout="20240115-143022.bak\n",
+            exit_code=0,
+        )
+
+        mock_services = Mock()
+        mock_services.is_healthy.return_value = True
+
+        deployer = Deployer(
+            ssh=mock_ssh,
+            backup_dir="/opt/satdeploy/backups",
+            max_backups=10,
+        )
+        result = deployer.rollback(
+            app_name="controller",
+            remote_path="/opt/disco/bin/controller",
+            service="controller.service",
+            service_manager=mock_services,
+        )
+
+        mock_services.is_healthy.assert_called_with("controller.service")
+        assert result.health_check_passed is True
+
+    def test_rollback_fails_when_no_backups(self):
+        """rollback should fail if no backups exist."""
+        mock_ssh = Mock()
+        mock_ssh.run.return_value = Mock(stdout="", exit_code=0)
+
+        mock_services = Mock()
+
+        deployer = Deployer(
+            ssh=mock_ssh,
+            backup_dir="/opt/satdeploy/backups",
+            max_backups=10,
+        )
+        result = deployer.rollback(
+            app_name="controller",
+            remote_path="/opt/disco/bin/controller",
+            service="controller.service",
+            service_manager=mock_services,
+        )
+
+        assert result.success is False
+        assert "no backup" in result.error_message.lower()
+
+    def test_rollback_fails_when_version_not_found(self):
+        """rollback should fail if specified version doesn't exist."""
+        mock_ssh = Mock()
+        mock_ssh.run.return_value = Mock(
+            stdout="20240115-143022.bak\n",
+            exit_code=0,
+        )
+
+        mock_services = Mock()
+
+        deployer = Deployer(
+            ssh=mock_ssh,
+            backup_dir="/opt/satdeploy/backups",
+            max_backups=10,
+        )
+        result = deployer.rollback(
+            app_name="controller",
+            remote_path="/opt/disco/bin/controller",
+            service="controller.service",
+            service_manager=mock_services,
+            version="20240101-000000",
+        )
+
+        assert result.success is False
+        assert "not found" in result.error_message.lower()
+
+    def test_rollback_result_includes_backup_path(self):
+        """rollback result should include the restored backup path."""
+        mock_ssh = Mock()
+        mock_ssh.run.return_value = Mock(
+            stdout="20240115-143022.bak\n",
+            exit_code=0,
+        )
+
+        mock_services = Mock()
+        mock_services.is_healthy.return_value = True
+
+        deployer = Deployer(
+            ssh=mock_ssh,
+            backup_dir="/opt/satdeploy/backups",
+            max_backups=10,
+        )
+        result = deployer.rollback(
+            app_name="controller",
+            remote_path="/opt/disco/bin/controller",
+            service="controller.service",
+            service_manager=mock_services,
+        )
+
+        assert result.backup_path == "/opt/satdeploy/backups/controller/20240115-143022.bak"
+
+    def test_rollback_without_service_skips_service_management(self):
+        """rollback for library (no service) should skip service management."""
+        mock_ssh = Mock()
+        mock_ssh.run.return_value = Mock(
+            stdout="20240115-143022.bak\n",
+            exit_code=0,
+        )
+
+        mock_services = Mock()
+
+        deployer = Deployer(
+            ssh=mock_ssh,
+            backup_dir="/opt/satdeploy/backups",
+            max_backups=10,
+        )
+        result = deployer.rollback(
+            app_name="libparam",
+            remote_path="/usr/lib/libparam.so",
+            service=None,
+            service_manager=mock_services,
+        )
+
+        mock_services.stop.assert_not_called()
+        mock_services.start.assert_not_called()
+        assert result.success is True
