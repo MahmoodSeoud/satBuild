@@ -85,7 +85,7 @@ def push(app: str, local: str | None, config_dir: Path | None):
             f"App '{app}' not found in config. Check your config.yaml."
         )
 
-    local_path = local or app_config.get("local")
+    local_path = os.path.expanduser(local or app_config.get("local"))
     remote_path = app_config.get("remote")
     service = app_config.get("service")
 
