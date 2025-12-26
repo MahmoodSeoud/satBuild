@@ -180,3 +180,50 @@ def status(config_dir: Path | None):
                 deployed = ssh.file_exists(remote_path)
                 status_str = "deployed" if deployed else "not deployed"
                 click.echo(f"  {app_name}: {status_str} (library)")
+
+
+@main.command("list")
+@click.argument("app")
+@click.option(
+    "--config-dir",
+    type=click.Path(path_type=Path),
+    default=None,
+    help="Config directory (default: ~/.satdeploy)",
+)
+def list_backups(app: str, config_dir: Path | None):
+    """Show available backups for an app.
+
+    APP is the name of the application to list backups for.
+    """
+    config_dir = config_dir or DEFAULT_CONFIG_DIR
+    config = Config(config_dir=config_dir)
+
+    if config.load() is None:
+        raise click.ClickException(
+            f"Config not found at {config.config_path}. Run 'satdeploy init' first."
+        )
+
+    app_config = config.get_app(app)
+    if app_config is None:
+        raise click.ClickException(
+            f"App '{app}' not found in config. Check your config.yaml."
+        )
+
+    target = config.target
+
+    with SSHClient(host=target["host"], user=target["user"]) as ssh:
+        deployer = Deployer(
+            ssh=ssh,
+            backup_dir=config.backup_dir,
+            max_backups=config.max_backups,
+        )
+
+        backups = deployer.list_backups(app)
+
+        if not backups:
+            click.echo(f"No backups found for {app}.")
+            return
+
+        click.echo(f"{'VERSION':<25} {'TIMESTAMP':<20}")
+        for backup in backups:
+            click.echo(f"{backup['version']:<25} {backup['timestamp']:<20}")
