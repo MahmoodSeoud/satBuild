@@ -799,3 +799,48 @@ class TestRollbackDialBehavior:
 
         assert result.exit_code == 0
         assert "cccccccc" in result.output
+
+
+class TestRollbackByHash:
+    """Tests for rollback by hash prefix."""
+
+    @patch("satdeploy.cli.SSHClient")
+    def test_rollback_by_hash_finds_correct_backup(self, mock_ssh_class, tmp_path):
+        """Rollback by hash prefix should find the matching backup."""
+        runner = CliRunner()
+        config_dir = tmp_path / ".satdeploy"
+        config_dir.mkdir()
+        config_file = config_dir / "config.yaml"
+        config_file.write_text(
+            yaml.dump(
+                {
+                    "target": {"host": "192.168.1.50", "user": "root"},
+                    "backup_dir": "/opt/satdeploy/backups",
+                    "apps": {
+                        "controller": {
+                            "local": "./build/controller",
+                            "remote": "/opt/disco/bin/controller",
+                            "service": "controller.service",
+                        }
+                    },
+                }
+            )
+        )
+
+        mock_ssh = MagicMock()
+        mock_ssh_class.return_value.__enter__ = Mock(return_value=mock_ssh)
+        mock_ssh_class.return_value.__exit__ = Mock(return_value=False)
+        mock_ssh.run.return_value = Mock(
+            stdout="20240117-120000-cccccccc.bak\n20240116-120000-bbbbbbbb.bak\n20240115-120000-aaaaaaaa.bak\n",
+            exit_code=0,
+        )
+
+        # Rollback by hash only (not full version string)
+        result = runner.invoke(
+            main,
+            ["rollback", "controller", "bbbbbbbb", "--config-dir", str(config_dir)],
+        )
+
+        assert result.exit_code == 0
+        assert "bbbbbbbb" in result.output
+        assert "2024-01-16 12:00:00" in result.output

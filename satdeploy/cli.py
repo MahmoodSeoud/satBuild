@@ -621,7 +621,11 @@ def rollback(app: str, version: str | None, config_dir: Path | None):
 
             if version:
                 # For explicit version, search raw backups (allow selecting specific backup)
+                # First try matching by full version string
                 matching = [b for b in raw_backups if b["version"] == version]
+                # If no match, try matching by hash prefix
+                if not matching:
+                    matching = [b for b in raw_backups if b.get("hash") == version]
                 if not matching:
                     raise click.ClickException(f"Version {version} not found")
                 backup = matching[0]
