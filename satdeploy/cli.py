@@ -438,8 +438,9 @@ def list_backups(app: str, config_dir: Path | None):
                     "timestamp": timestamp_display,
                 }
 
-            # Build unified list of unique versions
+            # Build unified list of unique versions, sorted by timestamp (newest first)
             versions = list(seen_keys.values())
+            versions.sort(key=lambda v: v.get("timestamp", ""), reverse=True)
 
             if not versions:
                 click.echo(f"No versions found for {app}.")
