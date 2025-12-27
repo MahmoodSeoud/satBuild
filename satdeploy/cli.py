@@ -438,7 +438,12 @@ def list_backups(app: str, config_dir: Path | None):
                     "timestamp": timestamp_display,
                 }
 
-            # Build unified list of unique versions, sorted by timestamp (newest first)
+            # For the deployed version, use history timestamp (when deployed)
+            # not backup timestamp (when it was later backed up)
+            if current_hash and current_hash in seen_keys:
+                seen_keys[current_hash]["timestamp"] = format_iso_timestamp(last_deploy.timestamp)
+
+            # Build unified list sorted by timestamp (newest first)
             versions = list(seen_keys.values())
             versions.sort(key=lambda v: v.get("timestamp", ""), reverse=True)
 
