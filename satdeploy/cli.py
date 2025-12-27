@@ -417,11 +417,31 @@ def list_backups(app: str, config_dir: Path | None):
         try:
             backups = deployer.list_backups(app)
 
-            # Check if we have anything to show
-            has_deployed = last_deploy and last_deploy.success
-            has_backups = len(backups) > 0
+            # Get currently deployed hash
+            current_hash = None
+            if last_deploy and last_deploy.success:
+                current_hash = last_deploy.binary_hash
 
-            if not has_deployed and not has_backups:
+            # Deduplicate backups by hash, keeping most recent (first in list)
+            seen_keys = {}
+            for backup in backups:
+                # Use hash if available, otherwise use version string
+                key = backup.get("hash") or backup.get("version")
+                if key and key not in seen_keys:
+                    seen_keys[key] = backup
+
+            # Add currently deployed version if not in backups (e.g., after first push)
+            if current_hash and current_hash not in seen_keys:
+                timestamp_display = format_iso_timestamp(last_deploy.timestamp)
+                seen_keys[current_hash] = {
+                    "hash": current_hash,
+                    "timestamp": timestamp_display,
+                }
+
+            # Build unified list of unique versions
+            versions = list(seen_keys.values())
+
+            if not versions:
                 click.echo(f"No versions found for {app}.")
                 return
 
@@ -432,26 +452,22 @@ def list_backups(app: str, config_dir: Path | None):
             click.echo(click.style(header, fg="bright_black"))
             click.echo(click.style("    " + "-" * 45, fg="bright_black"))
 
-            # Show currently deployed version first
-            if has_deployed:
-                hash_display = last_deploy.binary_hash or "-"
-                timestamp_display = format_iso_timestamp(last_deploy.timestamp)
+            # Show all versions, arrow on deployed one
+            for version in versions:
+                hash_display = version.get("hash") or "-"
+                timestamp_display = version.get("timestamp") or "-"
+                is_deployed = hash_display == current_hash
 
-                bullet = click.style(SYMBOLS["arrow"], fg="green")
-                hash_col = click.style(f"{hash_display:<10}", fg="green")
+                if is_deployed:
+                    bullet = click.style(SYMBOLS["arrow"], fg="green")
+                    hash_col = click.style(f"{hash_display:<10}", fg="green")
+                    status_col = click.style("deployed", fg="green")
+                else:
+                    bullet = click.style(SYMBOLS["bullet"], fg="blue")
+                    hash_col = click.style(f"{hash_display:<10}", fg="blue")
+                    status_col = click.style("backup", fg="blue")
+
                 timestamp_col = click.style(f"{timestamp_display:<20}", fg="bright_black")
-                status_col = click.style("deployed", fg="green")
-                click.echo(f"  {bullet} {hash_col}\t{timestamp_col}\t{status_col}")
-
-            # Show backups
-            for backup in backups:
-                hash_display = backup.get("hash") or "-"
-                timestamp_display = backup.get("timestamp") or "-"
-
-                bullet = click.style(SYMBOLS["bullet"], fg="blue")
-                hash_col = click.style(f"{hash_display:<10}", fg="blue")
-                timestamp_col = click.style(f"{timestamp_display:<20}", fg="bright_black")
-                status_col = click.style("backup", fg="blue")
                 click.echo(f"  {bullet} {hash_col}\t{timestamp_col}\t{status_col}")
 
         except SSHError as e:
@@ -534,9 +550,13 @@ def rollback(app: str, version: str | None, config_dir: Path | None):
             backup_hash = backup.get("hash") or "-"
             backup_timestamp = backup.get("timestamp") or "-"
 
-            # Calculate total steps: backup + restore + stop/start services
+            # Check if current version needs to be backed up (not already in backups)
+            backup_hashes = {b.get("hash") for b in backups if b.get("hash")}
+            needs_backup = current_hash and current_hash not in backup_hashes
+
+            # Calculate total steps
             num_services = len(services_to_manage)
-            total_steps = 2 + num_services * 2  # backup, restore, stop each, start each
+            total_steps = (1 if needs_backup else 0) + 1 + num_services * 2
             current_step = 0
 
             click.echo(f"Rolling back {app}...")
@@ -547,11 +567,12 @@ def rollback(app: str, version: str | None, config_dir: Path | None):
                 click.echo(step(current_step, total_steps, f"Stopping {svc_app} ({svc_name})"))
                 service_manager.stop(svc_name)
 
-            # Back up the current version before restoring
-            remote_target = f"{target['user']}@{target['host']}:{remote_path}"
-            current_step += 1
-            click.echo(step(current_step, total_steps, f"Backing up {remote_target}"))
-            deployer.backup(app, remote_path)
+            # Backup current version only if not already in backups
+            if needs_backup:
+                remote_target = f"{target['user']}@{target['host']}:{remote_path}"
+                current_step += 1
+                click.echo(step(current_step, total_steps, f"Backing up {remote_target}"))
+                deployer.backup(app, remote_path)
 
             # Restore the backup
             current_step += 1
