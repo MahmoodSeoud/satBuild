@@ -5,8 +5,10 @@ import click
 from satdeploy.output import (
     success,
     warning,
+    error,
     step,
     SYMBOLS,
+    SatDeployError,
 )
 
 
@@ -43,6 +45,12 @@ class TestMessageFormatters:
         result = warning("Caution")
         assert "\x1b[" in result or "Caution" in result
 
+    def test_error_returns_red_with_cross(self):
+        result = error("Failed")
+        assert "✗" in result
+        # The result should contain ANSI color codes for red
+        assert "\x1b[" in result or result == "✗ Failed"
+
 
 class TestStepFormatter:
     """Test step counter formatting."""
@@ -56,3 +64,19 @@ class TestStepFormatter:
         result = step(2, 3, "Deploying")
         assert "[2/3]" in result
         assert "Deploying" in result
+
+
+class TestSatDeployError:
+    """Test custom error exception."""
+
+    def test_error_formats_message_in_red(self):
+        err = SatDeployError("Something went wrong")
+        formatted = err.format_message()
+        assert "✗" in formatted
+        assert "Something went wrong" in formatted
+        # Should contain ANSI red color codes
+        assert "\x1b[" in formatted
+
+    def test_error_is_click_exception(self):
+        err = SatDeployError("Test error")
+        assert isinstance(err, click.ClickException)

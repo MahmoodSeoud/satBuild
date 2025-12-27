@@ -10,7 +10,7 @@ from satdeploy.config import DEFAULT_CONFIG_DIR, Config
 from satdeploy.dependencies import DependencyResolver
 from satdeploy.deployer import Deployer
 from satdeploy.history import DeploymentRecord, History
-from satdeploy.output import success, warning, step, SYMBOLS
+from satdeploy.output import success, warning, step, SYMBOLS, SatDeployError
 from satdeploy.services import ServiceManager, ServiceStatus
 from satdeploy.ssh import SSHClient, SSHError
 
@@ -60,12 +60,12 @@ def get_services_to_manage(
         List of (app_name, service_name) tuples in stop order.
 
     Raises:
-        click.ClickException: If cyclic dependencies are detected.
+        SatDeployError: If cyclic dependencies are detected.
     """
     resolver = DependencyResolver(config.apps)
 
     if resolver.has_cycle():
-        raise click.ClickException("Cyclic dependency detected in config")
+        raise SatDeployError("Cyclic dependency detected in config")
 
     # For libraries with restart list, use that
     restart_apps = resolver.get_restart_apps(app)
@@ -101,11 +101,11 @@ def get_app_config_or_error(config: Config, app: str) -> dict:
         The app configuration dict.
 
     Raises:
-        click.ClickException: If the app is not found in config.
+        SatDeployError: If the app is not found in config.
     """
     app_config = config.get_app(app)
     if app_config is None:
-        raise click.ClickException(
+        raise SatDeployError(
             f"App '{app}' not found in config. Check your config.yaml."
         )
     return app_config
@@ -221,7 +221,7 @@ def push(app: str, local: str | None, config_dir: Path | None):
     config = Config(config_dir=config_dir)
 
     if config.load() is None:
-        raise click.ClickException(
+        raise SatDeployError(
             f"Config not found at {config.config_path}. Run 'satdeploy init' first."
         )
 
@@ -232,7 +232,7 @@ def push(app: str, local: str | None, config_dir: Path | None):
     service = app_config.get("service")
 
     if not os.path.exists(local_path):
-        raise click.ClickException(f"Local file not found: {local_path}")
+        raise SatDeployError(f"Local file not found: {local_path}")
 
     target = config.target
     history = get_history(config_dir)
@@ -349,7 +349,7 @@ def push(app: str, local: str | None, config_dir: Path | None):
             success=False,
             error_message=str(e),
         ))
-        raise click.ClickException(str(e))
+        raise SatDeployError(str(e))
 
 
 @main.command()
@@ -365,7 +365,7 @@ def status(config_dir: Path | None):
     config = Config(config_dir=config_dir)
 
     if config.load() is None:
-        raise click.ClickException(
+        raise SatDeployError(
             f"Config not found at {config.config_path}. Run 'satdeploy init' first."
         )
 
@@ -448,7 +448,7 @@ def status(config_dir: Path | None):
                 )
 
     except SSHError as e:
-        raise click.ClickException(str(e))
+        raise SatDeployError(str(e))
 
 
 @main.command("list")
@@ -471,7 +471,7 @@ def list_backups(app: str, config_dir: Path | None):
     config = Config(config_dir=config_dir)
 
     if config.load() is None:
-        raise click.ClickException(
+        raise SatDeployError(
             f"Config not found at {config.config_path}. Run 'satdeploy init' first."
         )
 
@@ -549,7 +549,7 @@ def list_backups(app: str, config_dir: Path | None):
                 click.echo(f"  {bullet} {hash_col}\t{timestamp_col}\t{status_col}")
 
         except SSHError as e:
-            raise click.ClickException(str(e))
+            raise SatDeployError(str(e))
 
 
 @main.command()
@@ -572,7 +572,7 @@ def rollback(app: str, hash: str | None, config_dir: Path | None):  # noqa: A002
     config = Config(config_dir=config_dir)
 
     if config.load() is None:
-        raise click.ClickException(
+        raise SatDeployError(
             f"Config not found at {config.config_path}. Run 'satdeploy init' first."
         )
 
@@ -600,7 +600,7 @@ def rollback(app: str, hash: str | None, config_dir: Path | None):  # noqa: A002
             # Get backup list and find the right one
             raw_backups = deployer.list_backups(app)
             if not raw_backups:
-                raise click.ClickException("No backups available for rollback")
+                raise SatDeployError("No backups available for rollback")
 
             # Deduplicate backups by hash, keeping most recent (first in list)
             # This prevents the dial from bouncing between duplicate backups
@@ -614,7 +614,7 @@ def rollback(app: str, hash: str | None, config_dir: Path | None):  # noqa: A002
                     backups.append(b)
 
             if not backups:
-                raise click.ClickException("No backups available for rollback")
+                raise SatDeployError("No backups available for rollback")
 
             # Get currently deployed hash to find position in version history
             last_deploy = history.get_last_deployment(app)
@@ -624,7 +624,7 @@ def rollback(app: str, hash: str | None, config_dir: Path | None):  # noqa: A002
                 # Match by hash prefix
                 matching = [b for b in raw_backups if b.get("hash") == target_hash]
                 if not matching:
-                    raise click.ClickException(f"Hash {target_hash} not found")
+                    raise SatDeployError(f"Hash {target_hash} not found")
                 backup = matching[0]
             elif current_hash:
                 # Dial behavior: find current position and go to next older version
@@ -697,7 +697,7 @@ def rollback(app: str, hash: str | None, config_dir: Path | None):  # noqa: A002
             success=False,
             error_message=str(e),
         ))
-        raise click.ClickException(str(e))
+        raise SatDeployError(str(e))
 
 
 @main.command()
@@ -724,7 +724,7 @@ def logs(app: str, lines: int, config_dir: Path | None):
     config = Config(config_dir=config_dir)
 
     if config.load() is None:
-        raise click.ClickException(
+        raise SatDeployError(
             f"Config not found at {config.config_path}. Run 'satdeploy init' first."
         )
 
@@ -732,7 +732,7 @@ def logs(app: str, lines: int, config_dir: Path | None):
 
     service = app_config.get("service")
     if not service:
-        raise click.ClickException(
+        raise SatDeployError(
             f"App '{app}' is a library and has no service. Cannot show logs."
         )
 
@@ -747,4 +747,4 @@ def logs(app: str, lines: int, config_dir: Path | None):
             click.echo(log_output)
 
     except SSHError as e:
-        raise click.ClickException(str(e))
+        raise SatDeployError(str(e))
