@@ -21,6 +21,56 @@ def get_history(config_dir: Path) -> History:
     return history
 
 
+def get_services_to_manage(
+    config: Config,
+    app: str,
+    service: str | None,
+) -> list[tuple[str, str]]:
+    """Get list of services to stop/start for an app deployment.
+
+    For apps with a restart list (libraries), returns those services.
+    For apps with dependencies, returns the dependency chain.
+    For standalone apps, returns just that app's service.
+
+    Args:
+        config: The loaded configuration.
+        app: The app being deployed/rolled back.
+        service: The app's service name (None for libraries).
+
+    Returns:
+        List of (app_name, service_name) tuples in stop order.
+
+    Raises:
+        click.ClickException: If cyclic dependencies are detected.
+    """
+    resolver = DependencyResolver(config.apps)
+
+    if resolver.has_cycle():
+        raise click.ClickException("Cyclic dependency detected in config")
+
+    # For libraries with restart list, use that
+    restart_apps = resolver.get_restart_apps(app)
+    if restart_apps:
+        services = []
+        for restart_app in restart_apps:
+            restart_config = config.get_app(restart_app)
+            if restart_config and restart_config.get("service"):
+                services.append((restart_app, restart_config.get("service")))
+        return services
+
+    # For services with dependencies, get the full stop order
+    if service:
+        stop_order = resolver.get_stop_order(app)
+        services = []
+        for dep_app in stop_order:
+            dep_config = config.get_app(dep_app)
+            if dep_config and dep_config.get("service"):
+                services.append((dep_app, dep_config.get("service")))
+        return services
+
+    return []
+
+
 @click.group()
 def main():
     """Deploy binaries to embedded Linux targets."""
@@ -119,38 +169,9 @@ def push(app: str, local: str | None, config_dir: Path | None):
                 max_backups=config.max_backups,
             )
 
-            # Resolve dependencies
-            resolver = DependencyResolver(config.apps)
+            services_to_manage = get_services_to_manage(config, app, service)
 
-            # Check for cycles
-            if resolver.has_cycle():
-                raise click.ClickException("Cyclic dependency detected in config")
-
-            # For libraries with restart list, use that
-            restart_apps = resolver.get_restart_apps(app)
-            if restart_apps:
-                # Library with restart list
-                services_to_manage = []
-                for restart_app in restart_apps:
-                    restart_config = config.get_app(restart_app)
-                    if restart_config and restart_config.get("service"):
-                        services_to_manage.append(
-                            (restart_app, restart_config.get("service"))
-                        )
-            elif service:
-                # Service with dependencies
-                stop_order = resolver.get_stop_order(app)
-                services_to_manage = []
-                for dep_app in stop_order:
-                    dep_config = config.get_app(dep_app)
-                    if dep_config and dep_config.get("service"):
-                        services_to_manage.append(
-                            (dep_app, dep_config.get("service"))
-                        )
-            else:
-                services_to_manage = []
-
-            # Calculate total steps: backup + deploy + stop services + start services + health checks
+            # Calculate total steps: backup + deploy + stop services + start services
             num_services = len(services_to_manage)
             total_steps = 2 + num_services * 2  # backup, deploy, stop each, start each
             current_step = 0
@@ -457,36 +478,7 @@ def rollback(app: str, version: str | None, config_dir: Path | None):
                 max_backups=config.max_backups,
             )
 
-            # Resolve dependencies
-            resolver = DependencyResolver(config.apps)
-
-            # Check for cycles
-            if resolver.has_cycle():
-                raise click.ClickException("Cyclic dependency detected in config")
-
-            # For libraries with restart list, use that
-            restart_apps = resolver.get_restart_apps(app)
-            if restart_apps:
-                # Library with restart list
-                services_to_manage = []
-                for restart_app in restart_apps:
-                    restart_config = config.get_app(restart_app)
-                    if restart_config and restart_config.get("service"):
-                        services_to_manage.append(
-                            (restart_app, restart_config.get("service"))
-                        )
-            elif service:
-                # Service with dependencies
-                stop_order = resolver.get_stop_order(app)
-                services_to_manage = []
-                for dep_app in stop_order:
-                    dep_config = config.get_app(dep_app)
-                    if dep_config and dep_config.get("service"):
-                        services_to_manage.append(
-                            (dep_app, dep_config.get("service"))
-                        )
-            else:
-                services_to_manage = []
+            services_to_manage = get_services_to_manage(config, app, service)
 
             # Calculate total steps: restore + stop services + start services
             num_services = len(services_to_manage)
