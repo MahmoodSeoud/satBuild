@@ -743,8 +743,8 @@ class TestRollbackDialBehavior:
             ["rollback", "controller", "--config-dir", str(config_dir)],
         )
 
-        # Should fail because we're at the oldest version
-        assert result.exit_code != 0
+        # Should warn (not error) because we're at the oldest version
+        assert result.exit_code == 0
         assert "oldest" in result.output.lower()
 
     @patch("satdeploy.cli.SSHClient")
