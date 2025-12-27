@@ -90,6 +90,27 @@ def get_services_to_manage(
     return []
 
 
+def get_app_config_or_error(config: Config, app: str) -> dict:
+    """Get app configuration or raise ClickException if not found.
+
+    Args:
+        config: The loaded configuration.
+        app: The app name to look up.
+
+    Returns:
+        The app configuration dict.
+
+    Raises:
+        click.ClickException: If the app is not found in config.
+    """
+    app_config = config.get_app(app)
+    if app_config is None:
+        raise click.ClickException(
+            f"App '{app}' not found in config. Check your config.yaml."
+        )
+    return app_config
+
+
 @click.group()
 def main():
     """Deploy binaries to embedded Linux targets."""
@@ -485,9 +506,37 @@ def rollback(app: str, version: str | None, config_dir: Path | None):
 
             services_to_manage = get_services_to_manage(config, app, service)
 
-            # Calculate total steps: restore + stop services + start services
+            # Get backup list and find the right one
+            backups = deployer.list_backups(app)
+            if not backups:
+                raise click.ClickException("No backups available for rollback")
+
+            # Get currently deployed hash to filter it out
+            last_deploy = history.get_last_deployment(app)
+            current_hash = last_deploy.binary_hash if last_deploy and last_deploy.success else None
+
+            if version:
+                matching = [b for b in backups if b["version"] == version]
+                if not matching:
+                    raise click.ClickException(f"Version {version} not found")
+                backup = matching[0]
+            elif current_hash:
+                # Filter out the currently deployed version
+                available = [b for b in backups if b.get("hash") != current_hash]
+                if not available:
+                    raise click.ClickException("No different backup available for rollback")
+                backup = available[0]
+            else:
+                # No history, just use the most recent backup
+                backup = backups[0]
+
+            backup_path = backup["path"]
+            backup_hash = backup.get("hash") or "-"
+            backup_timestamp = backup.get("timestamp") or "-"
+
+            # Calculate total steps: backup + restore + stop/start services
             num_services = len(services_to_manage)
-            total_steps = 1 + num_services * 2  # restore, stop each, start each
+            total_steps = 2 + num_services * 2  # backup, restore, stop each, start each
             current_step = 0
 
             click.echo(f"Rolling back {app}...")
@@ -498,22 +547,11 @@ def rollback(app: str, version: str | None, config_dir: Path | None):
                 click.echo(step(current_step, total_steps, f"Stopping {svc_app} ({svc_name})"))
                 service_manager.stop(svc_name)
 
-            # Get backup list and find the right one
-            backups = deployer.list_backups(app)
-            if not backups:
-                raise click.ClickException("No backups available for rollback")
-
-            if version:
-                matching = [b for b in backups if b["version"] == version]
-                if not matching:
-                    raise click.ClickException(f"Version {version} not found")
-                backup = matching[0]
-            else:
-                backup = backups[0]
-
-            backup_path = backup["path"]
-            backup_hash = backup.get("hash") or "-"
-            backup_timestamp = backup.get("timestamp") or "-"
+            # Back up the current version before restoring
+            remote_target = f"{target['user']}@{target['host']}:{remote_path}"
+            current_step += 1
+            click.echo(step(current_step, total_steps, f"Backing up {remote_target}"))
+            deployer.backup(app, remote_path)
 
             # Restore the backup
             current_step += 1
