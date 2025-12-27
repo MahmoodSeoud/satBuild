@@ -16,13 +16,13 @@ def success(message: str) -> str:
 
 
 def warning(message: str) -> str:
-    """Format a warning message with yellow color."""
-    return click.style(message, fg="yellow")
+    """Format a warning message with yellow color and [WARNING] prefix."""
+    return click.style(f"[WARNING] {message}", fg="yellow")
 
 
 def error(message: str) -> str:
-    """Format an error message with red color."""
-    return click.style(message, fg="red")
+    """Format an error message with red color and [ERROR] prefix."""
+    return click.style(f"[ERROR] {message}", fg="red")
 
 
 def step(current: int, total: int, message: str) -> str:
