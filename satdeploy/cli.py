@@ -524,7 +524,21 @@ def rollback(app: str, version: str | None, config_dir: Path | None):
             services_to_manage = get_services_to_manage(config, app, service)
 
             # Get backup list and find the right one
-            backups = deployer.list_backups(app)
+            raw_backups = deployer.list_backups(app)
+            if not raw_backups:
+                raise click.ClickException("No backups available for rollback")
+
+            # Deduplicate backups by hash, keeping most recent (first in list)
+            # This prevents the dial from bouncing between duplicate backups
+            # Skip old-format backups without hash - they're not supported
+            seen_hashes = set()
+            backups = []
+            for b in raw_backups:
+                h = b.get("hash")
+                if h and h not in seen_hashes:
+                    seen_hashes.add(h)
+                    backups.append(b)
+
             if not backups:
                 raise click.ClickException("No backups available for rollback")
 
@@ -533,13 +547,14 @@ def rollback(app: str, version: str | None, config_dir: Path | None):
             current_hash = last_deploy.binary_hash if last_deploy and last_deploy.success else None
 
             if version:
-                matching = [b for b in backups if b["version"] == version]
+                # For explicit version, search raw backups (allow selecting specific backup)
+                matching = [b for b in raw_backups if b["version"] == version]
                 if not matching:
                     raise click.ClickException(f"Version {version} not found")
                 backup = matching[0]
             elif current_hash:
                 # Dial behavior: find current position and go to next older version
-                # Backups are sorted newest-first, so "next older" means index + 1
+                # Backups are deduplicated and sorted newest-first
                 current_index = None
                 for i, b in enumerate(backups):
                     if b.get("hash") == current_hash:

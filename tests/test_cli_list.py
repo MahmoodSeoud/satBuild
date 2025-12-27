@@ -92,7 +92,7 @@ class TestListCommand:
         mock_ssh_class.return_value.__enter__ = Mock(return_value=mock_ssh)
         mock_ssh_class.return_value.__exit__ = Mock(return_value=False)
         mock_ssh.run.return_value = Mock(
-            stdout="20240115-143022.bak\n20240114-091500.bak\n",
+            stdout="20240115-143022-abc12345.bak\n20240114-091500-def67890.bak\n",
             exit_code=0,
         )
 
@@ -133,7 +133,7 @@ class TestListCommand:
         mock_ssh_class.return_value.__enter__ = Mock(return_value=mock_ssh)
         mock_ssh_class.return_value.__exit__ = Mock(return_value=False)
         mock_ssh.run.return_value = Mock(
-            stdout="20240115-143022.bak\n",
+            stdout="20240115-143022-abc12345.bak\n",
             exit_code=0,
         )
 
@@ -213,7 +213,7 @@ class TestListPolishedOutput:
         mock_ssh_class.return_value.__enter__ = Mock(return_value=mock_ssh)
         mock_ssh_class.return_value.__exit__ = Mock(return_value=False)
         mock_ssh.run.return_value = Mock(
-            stdout="20240115-143022.bak\n20240114-091500.bak\n",
+            stdout="20240115-143022-abc12345.bak\n20240114-091500-def67890.bak\n",
             exit_code=0,
         )
 
@@ -253,7 +253,7 @@ class TestListPolishedOutput:
         mock_ssh_class.return_value.__enter__ = Mock(return_value=mock_ssh)
         mock_ssh_class.return_value.__exit__ = Mock(return_value=False)
         mock_ssh.run.return_value = Mock(
-            stdout="20240115-143022.bak\n",
+            stdout="20240115-143022-abc12345.bak\n",
             exit_code=0,
         )
 
