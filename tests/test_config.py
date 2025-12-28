@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from satdeploy.config import Config, DEFAULT_CONFIG_DIR
+from satdeploy.config import Config, DEFAULT_CONFIG_DIR, ModuleConfig
 
 
 class TestConfigPath:
@@ -178,3 +178,29 @@ class TestConfigGetApp:
         config = Config(config_dir=tmp_path)
         config.load()
         assert config.get_app("nonexistent") is None
+
+
+class TestModuleConfig:
+    """Test ModuleConfig dataclass."""
+
+    def test_module_config_holds_module_settings(self):
+        """ModuleConfig should hold all module-specific settings."""
+        module = ModuleConfig(
+            name="som1",
+            host="192.168.1.10",
+            user="root",
+            csp_addr=5421,
+            netmask=8,
+            interface=0,
+            baudrate=100000,
+            vmem_path="/home/root/a53vmem",
+        )
+
+        assert module.name == "som1"
+        assert module.host == "192.168.1.10"
+        assert module.user == "root"
+        assert module.csp_addr == 5421
+        assert module.netmask == 8
+        assert module.interface == 0
+        assert module.baudrate == 100000
+        assert module.vmem_path == "/home/root/a53vmem"

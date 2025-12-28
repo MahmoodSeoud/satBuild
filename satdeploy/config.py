@@ -1,9 +1,24 @@
 """Configuration loading and validation for satdeploy."""
 
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
 
 import yaml
+
+
+@dataclass
+class ModuleConfig:
+    """Configuration for a deployment target module."""
+
+    name: str
+    host: str
+    user: str
+    csp_addr: int
+    netmask: int
+    interface: int
+    baudrate: int
+    vmem_path: str
 
 DEFAULT_CONFIG_DIR = Path.home() / ".satdeploy"
 
