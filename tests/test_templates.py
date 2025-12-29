@@ -52,3 +52,39 @@ class TestRenderServiceTemplate:
             "5421 8 0 100000 "
             "-v /home/root/a53vmem"
         )
+
+    def test_handles_flexible_whitespace_in_placeholders(self):
+        """Should handle placeholders with varying whitespace."""
+        module = ModuleConfig(
+            name="som1",
+            host="192.168.1.10",
+            user="root",
+            csp_addr=5421,
+            netmask=8,
+            interface=0,
+            baudrate=100000,
+            vmem_path="/home/root/a53vmem",
+        )
+        template = "{{csp_addr}} {{  netmask  }} {{ interface}}"
+
+        result = render_service_template(template, module)
+
+        assert result == "5421 8 0"
+
+    def test_returns_unchanged_template_with_no_placeholders(self):
+        """Should return template unchanged when no placeholders exist."""
+        module = ModuleConfig(
+            name="som1",
+            host="192.168.1.10",
+            user="root",
+            csp_addr=5421,
+            netmask=8,
+            interface=0,
+            baudrate=100000,
+            vmem_path="/home/root/a53vmem",
+        )
+        template = "[Unit]\nDescription=My Service\n[Service]\nExecStart=/bin/true"
+
+        result = render_service_template(template, module)
+
+        assert result == template
