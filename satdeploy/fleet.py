@@ -3,6 +3,7 @@
 from satdeploy.config import Config
 from satdeploy.deployer import Deployer
 from satdeploy.history import History
+from satdeploy.templates import render_service_template
 
 
 class FleetManager:
@@ -72,3 +73,31 @@ class FleetManager:
             }
 
         return result
+
+    def sync_modules(self, source: str, target: str, clean_vmem: bool = False) -> None:
+        """Sync target module to match source module.
+
+        Args:
+            source: Source module name to sync from.
+            target: Target module name to sync to.
+            clean_vmem: If True, clear vmem directories on target.
+        """
+        diff = self.diff_modules(source, target)
+        target_module = self.config.get_module(target)
+
+        for app_name, app_diff in diff.items():
+            if not app_diff["match"]:
+                app = self.config.get_app(app_name)
+                if app:
+                    # Clear vmem if requested
+                    if clean_vmem and app.vmem_dir:
+                        self.deployer.clear_vmem_dir(app.vmem_dir)
+
+                    self.deployer.deploy(app.local, app.remote)
+
+                    # Render and upload service template if present
+                    if app.service_template and app.service:
+                        content = render_service_template(
+                            app.service_template, target_module
+                        )
+                        self.deployer.upload_service(app.service, content)

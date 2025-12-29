@@ -349,3 +349,189 @@ class TestDiffModules:
         assert diff["unique_app"]["som1"] == "unique_hash"
         assert diff["unique_app"]["som2"] is None
         assert diff["unique_app"]["match"] is False
+
+
+class TestSyncModules:
+    """Tests for FleetManager.sync_modules()."""
+
+    def test_sync_modules_deploys_differing_apps_to_target(self):
+        """sync_modules should deploy apps that differ to the target module."""
+        from satdeploy.config import AppConfig
+
+        config = Mock()
+        config.get_module.return_value = ModuleConfig(
+            name="som2",
+            host="192.168.1.11",
+            user="root",
+            csp_addr=5475,
+            netmask=8,
+            interface=0,
+            baudrate=100000,
+            vmem_path="/home/root/a53vmem",
+        )
+        config.get_app.return_value = AppConfig(
+            name="controller",
+            local="./build/controller",
+            remote="/usr/bin/controller",
+            service="controller.service",
+            service_template=None,
+            vmem_dir=None,
+        )
+
+        history = Mock()
+        history.get_module_state.side_effect = lambda m: {
+            "som1": {"controller": DeploymentRecord(
+                module="som1", app="controller", binary_hash="hash_v2",
+                remote_path="/usr/bin/controller", action="push", success=True,
+            )},
+            "som2": {"controller": DeploymentRecord(
+                module="som2", app="controller", binary_hash="hash_v1",
+                remote_path="/usr/bin/controller", action="push", success=True,
+            )},
+        }[m]
+
+        deployer = Mock()
+        deployer.compute_hash.return_value = "hash_v2"
+
+        fleet = FleetManager(config=config, history=history, deployer=deployer)
+        fleet.sync_modules("som1", "som2")
+
+        # Should call deploy for the differing app
+        deployer.deploy.assert_called()
+
+    def test_sync_modules_skips_matching_apps(self):
+        """sync_modules should not deploy apps that already match."""
+        from satdeploy.config import AppConfig
+
+        config = Mock()
+        config.get_module.return_value = ModuleConfig(
+            name="som2",
+            host="192.168.1.11",
+            user="root",
+            csp_addr=5475,
+            netmask=8,
+            interface=0,
+            baudrate=100000,
+            vmem_path="/home/root/a53vmem",
+        )
+        config.get_app.return_value = AppConfig(
+            name="controller",
+            local="./build/controller",
+            remote="/usr/bin/controller",
+            service="controller.service",
+            service_template=None,
+            vmem_dir=None,
+        )
+
+        history = Mock()
+        history.get_module_state.side_effect = lambda m: {
+            "som1": {"controller": DeploymentRecord(
+                module="som1", app="controller", binary_hash="same_hash",
+                remote_path="/usr/bin/controller", action="push", success=True,
+            )},
+            "som2": {"controller": DeploymentRecord(
+                module="som2", app="controller", binary_hash="same_hash",
+                remote_path="/usr/bin/controller", action="push", success=True,
+            )},
+        }[m]
+
+        deployer = Mock()
+
+        fleet = FleetManager(config=config, history=history, deployer=deployer)
+        fleet.sync_modules("som1", "som2")
+
+        # Should NOT call deploy since hashes match
+        deployer.deploy.assert_not_called()
+
+    def test_sync_modules_clears_vmem_when_requested(self):
+        """sync_modules should clear vmem when clean_vmem is True."""
+        from satdeploy.config import AppConfig
+
+        config = Mock()
+        config.get_module.return_value = ModuleConfig(
+            name="som2",
+            host="192.168.1.11",
+            user="root",
+            csp_addr=5475,
+            netmask=8,
+            interface=0,
+            baudrate=100000,
+            vmem_path="/home/root/a53vmem",
+        )
+        config.get_app.return_value = AppConfig(
+            name="controller",
+            local="./build/controller",
+            remote="/usr/bin/controller",
+            service="controller.service",
+            service_template=None,
+            vmem_dir="/home/root/ctrlvmem",
+        )
+
+        history = Mock()
+        history.get_module_state.side_effect = lambda m: {
+            "som1": {"controller": DeploymentRecord(
+                module="som1", app="controller", binary_hash="hash_v2",
+                remote_path="/usr/bin/controller", action="push", success=True,
+            )},
+            "som2": {"controller": DeploymentRecord(
+                module="som2", app="controller", binary_hash="hash_v1",
+                remote_path="/usr/bin/controller", action="push", success=True,
+            )},
+        }[m]
+
+        deployer = Mock()
+
+        fleet = FleetManager(config=config, history=history, deployer=deployer)
+        fleet.sync_modules("som1", "som2", clean_vmem=True)
+
+        # Should call clear_vmem_dir for the app's vmem_dir
+        deployer.clear_vmem_dir.assert_called_with("/home/root/ctrlvmem")
+
+    def test_sync_modules_uploads_service_template(self):
+        """sync_modules should render and upload service template for target."""
+        from satdeploy.config import AppConfig
+
+        target_module = ModuleConfig(
+            name="som2",
+            host="192.168.1.11",
+            user="root",
+            csp_addr=5475,
+            netmask=8,
+            interface=0,
+            baudrate=100000,
+            vmem_path="/home/root/a53vmem",
+        )
+
+        config = Mock()
+        config.get_module.return_value = target_module
+        config.get_app.return_value = AppConfig(
+            name="controller",
+            local="./build/controller",
+            remote="/usr/bin/controller",
+            service="controller.service",
+            service_template="ExecStart=/usr/bin/controller {{ csp_addr }}",
+            vmem_dir=None,
+        )
+
+        history = Mock()
+        history.get_module_state.side_effect = lambda m: {
+            "som1": {"controller": DeploymentRecord(
+                module="som1", app="controller", binary_hash="hash_v2",
+                remote_path="/usr/bin/controller", action="push", success=True,
+            )},
+            "som2": {"controller": DeploymentRecord(
+                module="som2", app="controller", binary_hash="hash_v1",
+                remote_path="/usr/bin/controller", action="push", success=True,
+            )},
+        }[m]
+
+        deployer = Mock()
+
+        fleet = FleetManager(config=config, history=history, deployer=deployer)
+        fleet.sync_modules("som1", "som2")
+
+        # Should call upload_service with rendered template containing target's csp_addr
+        deployer.upload_service.assert_called()
+        call_args = deployer.upload_service.call_args
+        assert "controller.service" in call_args[0]
+        assert "5475" in call_args[0][1]  # Target's csp_addr should be in content
