@@ -306,3 +306,28 @@ class TestSyncCommand:
         result = runner.invoke(main, ["sync", "--help"])
         assert result.exit_code == 0
         assert "--yes" in result.output or "-y" in result.output
+
+
+class TestPushMultiModuleCommand:
+    """Test the push command with multi-module support."""
+
+    def test_push_has_module_option(self):
+        """Push should have --module option."""
+        runner = CliRunner()
+        result = runner.invoke(main, ["push", "--help"])
+        assert result.exit_code == 0
+        assert "--module" in result.output or "-m" in result.output
+
+    def test_push_has_all_option(self):
+        """Push should have --all option."""
+        runner = CliRunner()
+        result = runner.invoke(main, ["push", "--help"])
+        assert result.exit_code == 0
+        assert "--all" in result.output
+
+    def test_push_has_clean_vmem_option(self):
+        """Push should have --clean-vmem option."""
+        runner = CliRunner()
+        result = runner.invoke(main, ["push", "--help"])
+        assert result.exit_code == 0
+        assert "--clean-vmem" in result.output

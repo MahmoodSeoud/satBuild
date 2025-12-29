@@ -193,7 +193,10 @@ def init(config_dir: Path | None):
 
 
 @main.command()
-@click.argument("app")
+@click.argument("apps", nargs=-1)
+@click.option("--all", "all_apps", is_flag=True, help="Deploy all apps")
+@click.option("--module", "-m", default=None, help="Target module")
+@click.option("--clean-vmem", is_flag=True, help="Clear vmem for deployed apps")
 @click.option(
     "--local",
     type=click.Path(exists=False),
@@ -206,10 +209,17 @@ def init(config_dir: Path | None):
     default=None,
     help="Config directory (default: ~/.satdeploy)",
 )
-def push(app: str, local: str | None, config_dir: Path | None):
-    """Deploy a binary to the target.
+def push(
+    apps: tuple[str, ...],
+    all_apps: bool,
+    module: str | None,
+    clean_vmem: bool,
+    local: str | None,
+    config_dir: Path | None,
+):
+    """Deploy one or more apps to a module.
 
-    APP is the name of the application to deploy (as defined in config.yaml).
+    APPS are the names of the applications to deploy.
     """
     config_dir = config_dir or DEFAULT_CONFIG_DIR
     config = Config(config_dir=config_dir)
@@ -219,16 +229,52 @@ def push(app: str, local: str | None, config_dir: Path | None):
             f"Config not found at {config.config_path}. Run 'satdeploy init' first."
         )
 
-    app_config = get_app_config_or_error(config, app)
+    # Handle --all vs app list
+    if not apps and not all_apps:
+        raise SatDeployError("Specify app names or use --all")
+    if apps and all_apps:
+        raise SatDeployError("Cannot use both app names and --all")
 
-    local_path = os.path.expanduser(local or app_config.local)
-    remote_path = app_config.remote
-    service = app_config.service
+    if all_apps:
+        apps = tuple(config.get_all_app_names())
+        if not apps:
+            raise SatDeployError("No apps configured")
 
-    if not os.path.exists(local_path):
-        raise SatDeployError(f"Local file not found: {local_path}")
+    # For backward compatibility: single app without --module uses old behavior
+    # Get target from module or fall back to single target config
+    if module:
+        try:
+            module_config = config.get_module(module)
+            target = {"host": module_config.host, "user": module_config.user}
+        except KeyError:
+            raise SatDeployError(f"Module '{module}' not found in config")
+    else:
+        target = config.target
+        if target is None:
+            raise SatDeployError("No target configured and no --module specified")
+        module = "default"
 
-    target = config.target
+    # Only allow single app when using --local override
+    if local and len(apps) > 1:
+        raise SatDeployError("--local can only be used with a single app")
+
+    # For single app (backward compatibility)
+    app = apps[0] if len(apps) == 1 else None
+    if app:
+        app_config = get_app_config_or_error(config, app)
+        local_path = os.path.expanduser(local or app_config.local)
+        remote_path = app_config.remote
+        service = app_config.service
+
+        if not os.path.exists(local_path):
+            raise SatDeployError(f"Local file not found: {local_path}")
+    else:
+        # Multiple apps - validate all exist and have local files
+        for app_name in apps:
+            app_cfg = get_app_config_or_error(config, app_name)
+            local_path_check = os.path.expanduser(app_cfg.local)
+            if not os.path.exists(local_path_check):
+                raise SatDeployError(f"Local file not found: {local_path_check}")
     history = get_history(config_dir)
     binary_hash = None
 
@@ -252,6 +298,7 @@ def push(app: str, local: str | None, config_dir: Path | None):
             if local_hash and remote_hash and local_hash == remote_hash:
                 # Still record in history so it becomes the "current" version
                 history.record(DeploymentRecord(
+                    module=module,
                     app=app,
                     binary_hash=local_hash,
                     remote_path=remote_path,
@@ -291,6 +338,7 @@ def push(app: str, local: str | None, config_dir: Path | None):
                 start_services(service_manager, services_to_manage, counter)
 
                 history.record(DeploymentRecord(
+                    module=module,
                     app=app,
                     binary_hash=local_hash,
                     remote_path=remote_path,
@@ -323,6 +371,7 @@ def push(app: str, local: str | None, config_dir: Path | None):
             start_services(service_manager, services_to_manage, counter)
 
             history.record(DeploymentRecord(
+                module=module,
                 app=app,
                 binary_hash=local_hash,
                 remote_path=remote_path,
@@ -336,9 +385,10 @@ def push(app: str, local: str | None, config_dir: Path | None):
     except SSHError as e:
         # Log failed deployment
         history.record(DeploymentRecord(
-            app=app,
+            module=module,
+            app=app or apps[0] if apps else "",
             binary_hash=binary_hash or "",
-            remote_path=remote_path,
+            remote_path=remote_path if app else "",
             action="push",
             success=False,
             error_message=str(e),
