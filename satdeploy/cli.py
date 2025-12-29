@@ -73,8 +73,8 @@ def get_services_to_manage(
         services = []
         for restart_app in restart_apps:
             restart_config = config.get_app(restart_app)
-            if restart_config and restart_config.get("service"):
-                services.append((restart_app, restart_config.get("service")))
+            if restart_config and restart_config.service:
+                services.append((restart_app, restart_config.service))
         return services
 
     # For services with dependencies, get the full stop order
@@ -83,14 +83,14 @@ def get_services_to_manage(
         services = []
         for dep_app in stop_order:
             dep_config = config.get_app(dep_app)
-            if dep_config and dep_config.get("service"):
-                services.append((dep_app, dep_config.get("service")))
+            if dep_config and dep_config.service:
+                services.append((dep_app, dep_config.service))
         return services
 
     return []
 
 
-def get_app_config_or_error(config: Config, app: str) -> dict:
+def get_app_config_or_error(config: Config, app: str):
     """Get app configuration or raise ClickException if not found.
 
     Args:
@@ -98,7 +98,7 @@ def get_app_config_or_error(config: Config, app: str) -> dict:
         app: The app name to look up.
 
     Returns:
-        The app configuration dict.
+        The AppConfig object.
 
     Raises:
         SatDeployError: If the app is not found in config.
@@ -227,9 +227,9 @@ def push(app: str, local: str | None, config_dir: Path | None):
 
     app_config = get_app_config_or_error(config, app)
 
-    local_path = os.path.expanduser(local or app_config.get("local"))
-    remote_path = app_config.get("remote")
-    service = app_config.get("service")
+    local_path = os.path.expanduser(local or app_config.local)
+    remote_path = app_config.remote
+    service = app_config.service
 
     if not os.path.exists(local_path):
         raise SatDeployError(f"Local file not found: {local_path}")
@@ -578,8 +578,8 @@ def rollback(app: str, hash: str | None, config_dir: Path | None):  # noqa: A002
 
     app_config = get_app_config_or_error(config, app)
 
-    remote_path = app_config.get("remote")
-    service = app_config.get("service")
+    remote_path = app_config.remote
+    service = app_config.service
     target = config.target
     history = get_history(config_dir)
     backup_path = None
@@ -730,7 +730,7 @@ def logs(app: str, lines: int, config_dir: Path | None):
 
     app_config = get_app_config_or_error(config, app)
 
-    service = app_config.get("service")
+    service = app_config.service
     if not service:
         raise SatDeployError(
             f"App '{app}' is a library and has no service. Cannot show logs."

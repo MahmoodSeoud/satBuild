@@ -1,9 +1,36 @@
 """Configuration loading and validation for satdeploy."""
 
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
 
 import yaml
+
+
+@dataclass
+class ModuleConfig:
+    """Configuration for a deployment target module."""
+
+    name: str
+    host: str
+    user: str
+    csp_addr: int
+    netmask: int
+    interface: int
+    baudrate: int
+    vmem_path: str
+
+
+@dataclass
+class AppConfig:
+    """Configuration for a deployable application."""
+
+    name: str
+    local: str
+    remote: str
+    service: str | None
+    service_template: str | None
+    vmem_dir: str | None
 
 DEFAULT_CONFIG_DIR = Path.home() / ".satdeploy"
 
@@ -79,18 +106,31 @@ class Config:
 
         return errors
 
-    def get_app(self, name: str) -> Optional[dict]:
+    def get_app(self, name: str) -> Optional[AppConfig]:
         """Get configuration for a specific app.
 
         Args:
             name: The app name.
 
         Returns:
-            The app configuration, or None if not found.
+            The AppConfig, or None if not found.
         """
         if self._data is None:
             return None
-        return self._data.get("apps", {}).get(name)
+
+        apps = self._data.get("apps", {})
+        if name not in apps:
+            return None
+
+        app_data = apps[name]
+        return AppConfig(
+            name=name,
+            local=app_data["local"],
+            remote=app_data["remote"],
+            service=app_data.get("service"),
+            service_template=app_data.get("service_template"),
+            vmem_dir=app_data.get("vmem_dir"),
+        )
 
     @property
     def target(self) -> Optional[dict]:
@@ -119,3 +159,86 @@ class Config:
         if self._data is None:
             return 10
         return self._data.get("max_backups", 10)
+
+    def get_modules(self) -> dict[str, ModuleConfig]:
+        """Get all configured modules.
+
+        Returns:
+            Dictionary mapping module names to ModuleConfig objects.
+
+        Note:
+            For backward compatibility, if config has 'target' instead of
+            'modules', a single module named 'default' is created.
+        """
+        if self._data is None:
+            return {}
+
+        modules_data = self._data.get("modules", {})
+        appsys = self._data.get("appsys", {})
+
+        # Backward compatibility: treat old 'target' as single 'default' module
+        if not modules_data and "target" in self._data:
+            target = self._data["target"]
+            return {
+                "default": ModuleConfig(
+                    name="default",
+                    host=target["host"],
+                    user=target["user"],
+                    csp_addr=0,
+                    netmask=0,
+                    interface=0,
+                    baudrate=0,
+                    vmem_path="",
+                )
+            }
+
+        result = {}
+        for name, mod in modules_data.items():
+            result[name] = ModuleConfig(
+                name=name,
+                host=mod["host"],
+                user=mod["user"],
+                csp_addr=mod["csp_addr"],
+                netmask=appsys.get("netmask", 0),
+                interface=appsys.get("interface", 0),
+                baudrate=appsys.get("baudrate", 0),
+                vmem_path=appsys.get("vmem_path", ""),
+            )
+        return result
+
+    def get_module(self, name: str) -> ModuleConfig:
+        """Get configuration for a specific module.
+
+        Args:
+            name: The module name.
+
+        Returns:
+            ModuleConfig with module and inherited appsys settings.
+
+        Raises:
+            KeyError: If module name is not found.
+        """
+        modules = self.get_modules()
+        if name not in modules:
+            raise KeyError(f"Module '{name}' not found")
+        return modules[name]
+
+    def get_all_app_names(self) -> list[str]:
+        """Get names of all configured apps.
+
+        Returns:
+            List of app names.
+        """
+        if self._data is None:
+            return []
+        return list(self._data.get("apps", {}).keys())
+
+    def get_appsys(self) -> dict:
+        """Get appsys network settings.
+
+        Returns:
+            Dictionary with appsys settings (netmask, interface, etc.).
+        """
+        if self._data is None:
+            return {}
+        return self._data.get("appsys", {})
