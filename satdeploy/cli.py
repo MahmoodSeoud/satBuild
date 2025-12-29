@@ -804,3 +804,57 @@ def fleet_status(config_dir: Path | None):
             status_text = click.style("offline", fg="red")
 
         click.echo(f"  {status_symbol} {module_name:<12} {status_text}")
+
+
+@main.command()
+@click.argument("module1")
+@click.argument("module2")
+@click.option(
+    "--config-dir",
+    type=click.Path(path_type=Path),
+    default=None,
+    help="Config directory (default: ~/.satdeploy)",
+)
+def diff(module1: str, module2: str, config_dir: Path | None):
+    """Compare two modules.
+
+    MODULE1 and MODULE2 are the names of the modules to compare.
+    """
+    config_dir = config_dir or DEFAULT_CONFIG_DIR
+    config = Config(config_dir=config_dir)
+
+    if config.load() is None:
+        raise SatDeployError(
+            f"Config not found at {config.config_path}. Run 'satdeploy init' first."
+        )
+
+    history = get_history(config_dir)
+    state1 = history.get_module_state(module1)
+    state2 = history.get_module_state(module2)
+
+    all_apps = set(state1.keys()) | set(state2.keys())
+
+    if not all_apps:
+        click.echo("No deployment history for either module.")
+        return
+
+    click.echo(click.style(f"Comparing {module1} vs {module2}", bold=True))
+    click.echo("")
+
+    # Header
+    header = f"    {'APP':<16} {module1:<12} {module2:<12} {'STATUS'}"
+    click.echo(click.style(header, fg="bright_black"))
+    click.echo(click.style("    " + "-" * 50, fg="bright_black"))
+
+    for app_name in sorted(all_apps):
+        hash1 = state1[app_name].binary_hash if app_name in state1 else "-"
+        hash2 = state2[app_name].binary_hash if app_name in state2 else "-"
+
+        if hash1 == hash2:
+            symbol = click.style(SYMBOLS["check"], fg="green")
+            status = click.style("match", fg="green")
+        else:
+            symbol = click.style(SYMBOLS["cross"], fg="yellow")
+            status = click.style("differs", fg="yellow")
+
+        click.echo(f"  {symbol} {app_name:<16} {hash1:<12} {hash2:<12} {status}")

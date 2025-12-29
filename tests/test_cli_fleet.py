@@ -147,3 +147,117 @@ class TestFleetStatusCommand:
         assert result.exit_code == 0
         assert "online" in result.output.lower() or SYMBOLS["check"] in result.output
         assert "offline" in result.output.lower() or SYMBOLS["cross"] in result.output
+
+
+class TestDiffCommand:
+    """Test the diff command."""
+
+    def test_diff_command_exists(self):
+        """The diff command should exist."""
+        runner = CliRunner()
+        result = runner.invoke(main, ["diff", "--help"])
+        assert result.exit_code == 0
+        assert "module" in result.output.lower()
+
+    def test_diff_requires_two_modules(self):
+        """Diff should require two module arguments."""
+        runner = CliRunner()
+        result = runner.invoke(main, ["diff"])
+        assert result.exit_code != 0
+
+    def test_diff_fails_without_config(self, tmp_path):
+        """Diff should fail if config doesn't exist."""
+        runner = CliRunner()
+        config_dir = tmp_path / ".satdeploy"
+
+        result = runner.invoke(
+            main,
+            ["diff", "som1", "som2", "--config-dir", str(config_dir)],
+        )
+
+        assert result.exit_code != 0
+        assert "config" in result.output.lower()
+
+    def test_diff_shows_differences(self, tmp_path):
+        """Diff should show matching and differing apps."""
+        from satdeploy.history import History, DeploymentRecord
+
+        runner = CliRunner()
+        config_dir = tmp_path / ".satdeploy"
+        config_dir.mkdir()
+        config_file = config_dir / "config.yaml"
+        config_file.write_text(
+            yaml.dump(
+                {
+                    "modules": {
+                        "som1": {
+                            "host": "192.168.1.10",
+                            "user": "root",
+                            "csp_addr": 5421,
+                        },
+                        "som2": {
+                            "host": "192.168.1.11",
+                            "user": "root",
+                            "csp_addr": 5475,
+                        },
+                    },
+                    "appsys": {},
+                    "backup_dir": "/opt/satdeploy/backups",
+                    "apps": {
+                        "app1": {"local": "./app1", "remote": "/usr/bin/app1"},
+                        "app2": {"local": "./app2", "remote": "/usr/bin/app2"},
+                    },
+                }
+            )
+        )
+
+        # Create deployment history
+        history = History(config_dir / "history.db")
+        history.init_db()
+
+        # app1 has same hash on both modules
+        history.record(DeploymentRecord(
+            module="som1",
+            app="app1",
+            binary_hash="abc12345",
+            remote_path="/usr/bin/app1",
+            action="push",
+            success=True,
+        ))
+        history.record(DeploymentRecord(
+            module="som2",
+            app="app1",
+            binary_hash="abc12345",
+            remote_path="/usr/bin/app1",
+            action="push",
+            success=True,
+        ))
+
+        # app2 has different hash on each module
+        history.record(DeploymentRecord(
+            module="som1",
+            app="app2",
+            binary_hash="def67890",
+            remote_path="/usr/bin/app2",
+            action="push",
+            success=True,
+        ))
+        history.record(DeploymentRecord(
+            module="som2",
+            app="app2",
+            binary_hash="xyz99999",
+            remote_path="/usr/bin/app2",
+            action="push",
+            success=True,
+        ))
+
+        result = runner.invoke(
+            main,
+            ["diff", "som1", "som2", "--config-dir", str(config_dir)],
+        )
+
+        assert result.exit_code == 0
+        assert "app1" in result.output
+        assert "app2" in result.output
+        assert "match" in result.output.lower()
+        assert "differs" in result.output.lower()
