@@ -195,7 +195,7 @@ def init(config_dir: Path | None):
 @main.command()
 @click.argument("apps", nargs=-1)
 @click.option("--all", "all_apps", is_flag=True, help="Deploy all apps")
-@click.option("--module", "-m", default=None, help="Target module")
+@click.option("--module", "-m", required=True, help="Target module")
 @click.option("--clean-vmem", is_flag=True, help="Clear vmem for deployed apps")
 @click.option(
     "--local",
@@ -212,7 +212,7 @@ def init(config_dir: Path | None):
 def push(
     apps: tuple[str, ...],
     all_apps: bool,
-    module: str | None,
+    module: str,
     clean_vmem: bool,
     local: str | None,
     config_dir: Path | None,
@@ -240,19 +240,12 @@ def push(
         if not apps:
             raise SatDeployError("No apps configured")
 
-    # For backward compatibility: single app without --module uses old behavior
-    # Get target from module or fall back to single target config
-    if module:
-        try:
-            module_config = config.get_module(module)
-            target = {"host": module_config.host, "user": module_config.user}
-        except KeyError:
-            raise SatDeployError(f"Module '{module}' not found in config")
-    else:
-        target = config.target
-        if target is None:
-            raise SatDeployError("No target configured and no --module specified")
-        module = "default"
+    # Get target module
+    try:
+        module_config = config.get_module(module)
+        target = {"host": module_config.host, "user": module_config.user}
+    except KeyError:
+        raise SatDeployError(f"Module '{module}' not found in config")
 
     # Only allow single app when using --local override
     if local and len(apps) > 1:
@@ -397,13 +390,14 @@ def push(
 
 
 @main.command()
+@click.option("--module", "-m", required=True, help="Target module")
 @click.option(
     "--config-dir",
     type=click.Path(path_type=Path),
     default=None,
     help="Config directory (default: ~/.satdeploy)",
 )
-def status(config_dir: Path | None):
+def status(module: str, config_dir: Path | None):
     """Show status of deployed apps and services."""
     config_dir = config_dir or DEFAULT_CONFIG_DIR
     config = Config(config_dir=config_dir)
@@ -413,7 +407,11 @@ def status(config_dir: Path | None):
             f"Config not found at {config.config_path}. Run 'satdeploy init' first."
         )
 
-    target = config.target
+    try:
+        module_config = config.get_module(module)
+        target = {"host": module_config.host, "user": module_config.user}
+    except KeyError:
+        raise SatDeployError(f"Module '{module}' not found in config")
     apps = config.apps
     history = get_history(config_dir)
 
@@ -497,13 +495,14 @@ def status(config_dir: Path | None):
 
 @main.command("list")
 @click.argument("app")
+@click.option("--module", "-m", required=True, help="Target module")
 @click.option(
     "--config-dir",
     type=click.Path(path_type=Path),
     default=None,
     help="Config directory (default: ~/.satdeploy)",
 )
-def list_backups(app: str, config_dir: Path | None):
+def list_backups(app: str, module: str, config_dir: Path | None):
     """List all versions of an app (deployed + backups).
 
     APP is the name of the application to list versions for.
@@ -521,7 +520,11 @@ def list_backups(app: str, config_dir: Path | None):
 
     app_config = get_app_config_or_error(config, app)
 
-    target = config.target
+    try:
+        module_config = config.get_module(module)
+        target = {"host": module_config.host, "user": module_config.user}
+    except KeyError:
+        raise SatDeployError(f"Module '{module}' not found in config")
     history = get_history(config_dir)
 
     # Get currently deployed version from history
@@ -599,13 +602,14 @@ def list_backups(app: str, config_dir: Path | None):
 @main.command()
 @click.argument("app")
 @click.argument("hash", required=False, default=None)
+@click.option("--module", "-m", required=True, help="Target module")
 @click.option(
     "--config-dir",
     type=click.Path(path_type=Path),
     default=None,
     help="Config directory (default: ~/.satdeploy)",
 )
-def rollback(app: str, hash: str | None, config_dir: Path | None):  # noqa: A002
+def rollback(app: str, hash: str | None, module: str, config_dir: Path | None):  # noqa: A002
     """Rollback to a previous version.
 
     APP is the name of the application to rollback.
@@ -624,7 +628,11 @@ def rollback(app: str, hash: str | None, config_dir: Path | None):  # noqa: A002
 
     remote_path = app_config.remote
     service = app_config.service
-    target = config.target
+    try:
+        module_config = config.get_module(module)
+        target = {"host": module_config.host, "user": module_config.user}
+    except KeyError:
+        raise SatDeployError(f"Module '{module}' not found in config")
     history = get_history(config_dir)
     backup_path = None
 
@@ -746,6 +754,7 @@ def rollback(app: str, hash: str | None, config_dir: Path | None):  # noqa: A002
 
 @main.command()
 @click.argument("app")
+@click.option("--module", "-m", required=True, help="Target module")
 @click.option(
     "--lines",
     "-n",
@@ -759,7 +768,7 @@ def rollback(app: str, hash: str | None, config_dir: Path | None):  # noqa: A002
     default=None,
     help="Config directory (default: ~/.satdeploy)",
 )
-def logs(app: str, lines: int, config_dir: Path | None):
+def logs(app: str, module: str, lines: int, config_dir: Path | None):
     """Show logs for an app's service.
 
     APP is the name of the application to show logs for.
@@ -780,7 +789,11 @@ def logs(app: str, lines: int, config_dir: Path | None):
             f"App '{app}' is a library and has no service. Cannot show logs."
         )
 
-    target = config.target
+    try:
+        module_config = config.get_module(module)
+        target = {"host": module_config.host, "user": module_config.user}
+    except KeyError:
+        raise SatDeployError(f"Module '{module}' not found in config")
 
     try:
         with SSHClient(host=target["host"], user=target["user"]) as ssh:
