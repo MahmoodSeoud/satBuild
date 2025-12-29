@@ -163,8 +163,8 @@ class TestConfigGetApp:
         config.load()
         app = config.get_app("controller")
 
-        assert app["local"] == "./build/controller"
-        assert app["remote"] == "/opt/disco/bin/controller"
+        assert app.local == "./build/controller"
+        assert app.remote == "/opt/disco/bin/controller"
 
     def test_get_nonexistent_app_returns_none(self, tmp_path):
         """Getting a non-existent app should return None."""
@@ -388,3 +388,92 @@ class TestBackwardCompatibility:
         assert module.user == "root"
         assert module.csp_addr == 0
         assert module.netmask == 0
+
+
+class TestGetAppConfig:
+    """Test get_app() returning AppConfig."""
+
+    def test_get_app_returns_appconfig(self, tmp_path):
+        """get_app() should return AppConfig object."""
+        config_file = tmp_path / "config.yaml"
+        config_data = {
+            "modules": {
+                "som1": {
+                    "host": "192.168.1.10",
+                    "user": "root",
+                    "csp_addr": 5421,
+                },
+            },
+            "appsys": {
+                "netmask": 8,
+                "interface": 0,
+                "baudrate": 100000,
+                "vmem_path": "/home/root/a53vmem",
+            },
+            "apps": {
+                "a53-app-sys-manager": {
+                    "local": "./build/a53-app-sys-manager",
+                    "remote": "/usr/bin/a53-app-sys-manager",
+                    "service": "a53-app-sys-manager.service",
+                    "vmem_dir": "/home/root/a53vmem",
+                    "service_template": "[Unit]\nDescription=Test",
+                },
+            },
+        }
+        config_file.write_text(yaml.dump(config_data))
+
+        config = Config(config_dir=tmp_path)
+        config.load()
+        app = config.get_app("a53-app-sys-manager")
+
+        assert isinstance(app, AppConfig)
+        assert app.name == "a53-app-sys-manager"
+        assert app.local == "./build/a53-app-sys-manager"
+        assert app.remote == "/usr/bin/a53-app-sys-manager"
+        assert app.service == "a53-app-sys-manager.service"
+        assert app.vmem_dir == "/home/root/a53vmem"
+        assert app.service_template == "[Unit]\nDescription=Test"
+
+    def test_get_app_with_optional_fields_none(self, tmp_path):
+        """get_app() should handle missing optional fields as None."""
+        config_file = tmp_path / "config.yaml"
+        config_data = {
+            "modules": {
+                "som1": {
+                    "host": "192.168.1.10",
+                    "user": "root",
+                    "csp_addr": 5421,
+                },
+            },
+            "appsys": {},
+            "apps": {
+                "upload_client": {
+                    "local": "./build/upload_client",
+                    "remote": "/usr/bin/upload_client",
+                },
+            },
+        }
+        config_file.write_text(yaml.dump(config_data))
+
+        config = Config(config_dir=tmp_path)
+        config.load()
+        app = config.get_app("upload_client")
+
+        assert app.name == "upload_client"
+        assert app.service is None
+        assert app.service_template is None
+        assert app.vmem_dir is None
+
+    def test_get_app_nonexistent_returns_none(self, tmp_path):
+        """get_app() should return None for unknown app."""
+        config_file = tmp_path / "config.yaml"
+        config_data = {
+            "modules": {},
+            "appsys": {},
+            "apps": {},
+        }
+        config_file.write_text(yaml.dump(config_data))
+
+        config = Config(config_dir=tmp_path)
+        config.load()
+        assert config.get_app("nonexistent") is None

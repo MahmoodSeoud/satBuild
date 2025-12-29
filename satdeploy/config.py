@@ -106,18 +106,31 @@ class Config:
 
         return errors
 
-    def get_app(self, name: str) -> Optional[dict]:
+    def get_app(self, name: str) -> Optional[AppConfig]:
         """Get configuration for a specific app.
 
         Args:
             name: The app name.
 
         Returns:
-            The app configuration, or None if not found.
+            The AppConfig, or None if not found.
         """
         if self._data is None:
             return None
-        return self._data.get("apps", {}).get(name)
+
+        apps = self._data.get("apps", {})
+        if name not in apps:
+            return None
+
+        app_data = apps[name]
+        return AppConfig(
+            name=name,
+            local=app_data["local"],
+            remote=app_data["remote"],
+            service=app_data.get("service"),
+            service_template=app_data.get("service_template"),
+            vmem_dir=app_data.get("vmem_dir"),
+        )
 
     @property
     def target(self) -> Optional[dict]:
