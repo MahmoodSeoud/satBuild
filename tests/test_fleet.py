@@ -4,7 +4,9 @@ from unittest.mock import Mock
 
 import pytest
 
+from satdeploy.config import ModuleConfig
 from satdeploy.fleet import FleetManager
+from satdeploy.history import DeploymentRecord
 
 
 class TestFleetManagerInit:
@@ -21,3 +23,202 @@ class TestFleetManagerInit:
         assert fleet.config is config
         assert fleet.history is history
         assert fleet.deployer is deployer
+
+
+class TestGetStatus:
+    """Tests for FleetManager.get_status()."""
+
+    def test_get_status_returns_dict_with_modules(self):
+        """get_status should return dict keyed by module name."""
+        config = Mock()
+        config.get_modules.return_value = {
+            "som1": ModuleConfig(
+                name="som1",
+                host="192.168.1.10",
+                user="root",
+                csp_addr=5421,
+                netmask=8,
+                interface=0,
+                baudrate=100000,
+                vmem_path="/home/root/a53vmem",
+            ),
+        }
+        config.get_all_app_names.return_value = ["controller"]
+
+        history = Mock()
+        history.get_module_state.return_value = {}
+
+        deployer = Mock()
+        deployer.check_module_online.return_value = False
+
+        fleet = FleetManager(config=config, history=history, deployer=deployer)
+        status = fleet.get_status()
+
+        assert isinstance(status, dict)
+        assert "som1" in status
+
+    def test_get_status_includes_online_offline(self):
+        """get_status should include online/offline flag for each module."""
+        config = Mock()
+        config.get_modules.return_value = {
+            "som1": ModuleConfig(
+                name="som1",
+                host="192.168.1.10",
+                user="root",
+                csp_addr=5421,
+                netmask=8,
+                interface=0,
+                baudrate=100000,
+                vmem_path="/home/root/a53vmem",
+            ),
+        }
+        config.get_all_app_names.return_value = []
+
+        history = Mock()
+        history.get_module_state.return_value = {}
+
+        deployer = Mock()
+        deployer.check_module_online.return_value = True
+
+        fleet = FleetManager(config=config, history=history, deployer=deployer)
+        status = fleet.get_status()
+
+        assert "online" in status["som1"]
+        assert status["som1"]["online"] is True
+
+    def test_get_status_shows_offline_module(self):
+        """get_status should show offline when module is unreachable."""
+        config = Mock()
+        config.get_modules.return_value = {
+            "som1": ModuleConfig(
+                name="som1",
+                host="192.168.1.10",
+                user="root",
+                csp_addr=5421,
+                netmask=8,
+                interface=0,
+                baudrate=100000,
+                vmem_path="/home/root/a53vmem",
+            ),
+        }
+        config.get_all_app_names.return_value = []
+
+        history = Mock()
+        history.get_module_state.return_value = {}
+
+        deployer = Mock()
+        deployer.check_module_online.return_value = False
+
+        fleet = FleetManager(config=config, history=history, deployer=deployer)
+        status = fleet.get_status()
+
+        assert status["som1"]["online"] is False
+
+    def test_get_status_includes_apps_dict(self):
+        """get_status should include apps dict for each module."""
+        config = Mock()
+        config.get_modules.return_value = {
+            "som1": ModuleConfig(
+                name="som1",
+                host="192.168.1.10",
+                user="root",
+                csp_addr=5421,
+                netmask=8,
+                interface=0,
+                baudrate=100000,
+                vmem_path="/home/root/a53vmem",
+            ),
+        }
+        config.get_all_app_names.return_value = ["controller"]
+
+        history = Mock()
+        history.get_module_state.return_value = {}
+
+        deployer = Mock()
+        deployer.check_module_online.return_value = False
+
+        fleet = FleetManager(config=config, history=history, deployer=deployer)
+        status = fleet.get_status()
+
+        assert "apps" in status["som1"]
+        assert isinstance(status["som1"]["apps"], dict)
+
+    def test_get_status_offline_uses_history(self):
+        """When module is offline, get_status should use last known state from history."""
+        config = Mock()
+        config.get_modules.return_value = {
+            "som1": ModuleConfig(
+                name="som1",
+                host="192.168.1.10",
+                user="root",
+                csp_addr=5421,
+                netmask=8,
+                interface=0,
+                baudrate=100000,
+                vmem_path="/home/root/a53vmem",
+            ),
+        }
+        config.get_all_app_names.return_value = ["controller"]
+
+        history = Mock()
+        history.get_module_state.return_value = {
+            "controller": DeploymentRecord(
+                module="som1",
+                app="controller",
+                binary_hash="abc12345",
+                remote_path="/usr/bin/controller",
+                action="push",
+                success=True,
+                timestamp="2024-01-15T10:00:00",
+            )
+        }
+
+        deployer = Mock()
+        deployer.check_module_online.return_value = False
+
+        fleet = FleetManager(config=config, history=history, deployer=deployer)
+        status = fleet.get_status()
+
+        assert "controller" in status["som1"]["apps"]
+        assert status["som1"]["apps"]["controller"]["hash"] == "abc12345"
+        assert status["som1"]["apps"]["controller"]["last_deployed"] == "2024-01-15T10:00:00"
+
+    def test_get_status_online_uses_live_hash(self):
+        """When module is online, get_status should get live hash from remote."""
+        from satdeploy.config import AppConfig
+
+        config = Mock()
+        config.get_modules.return_value = {
+            "som1": ModuleConfig(
+                name="som1",
+                host="192.168.1.10",
+                user="root",
+                csp_addr=5421,
+                netmask=8,
+                interface=0,
+                baudrate=100000,
+                vmem_path="/home/root/a53vmem",
+            ),
+        }
+        config.get_all_app_names.return_value = ["controller"]
+        config.get_app.return_value = AppConfig(
+            name="controller",
+            local="./build/controller",
+            remote="/usr/bin/controller",
+            service="controller.service",
+            service_template=None,
+            vmem_dir=None,
+        )
+
+        history = Mock()
+        history.get_module_state.return_value = {}
+
+        deployer = Mock()
+        deployer.check_module_online.return_value = True
+        deployer.get_remote_hash.return_value = "live1234"
+
+        fleet = FleetManager(config=config, history=history, deployer=deployer)
+        status = fleet.get_status()
+
+        assert "controller" in status["som1"]["apps"]
+        assert status["som1"]["apps"]["controller"]["hash"] == "live1234"
