@@ -101,3 +101,22 @@ class TestComputeServiceHash:
 
         assert len(result) == 8
         assert all(c in "0123456789abcdef" for c in result)
+
+    def test_same_content_produces_same_hash(self):
+        """Should produce identical hash for identical content."""
+        content = "[Unit]\nDescription=Test"
+
+        hash1 = compute_service_hash(content)
+        hash2 = compute_service_hash(content)
+
+        assert hash1 == hash2
+
+    def test_different_content_produces_different_hash(self):
+        """Should produce different hash for different content."""
+        content1 = "[Unit]\nDescription=Service A"
+        content2 = "[Unit]\nDescription=Service B"
+
+        hash1 = compute_service_hash(content1)
+        hash2 = compute_service_hash(content2)
+
+        assert hash1 != hash2
