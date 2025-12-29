@@ -3,7 +3,7 @@
 import pytest
 
 from satdeploy.config import ModuleConfig
-from satdeploy.templates import render_service_template
+from satdeploy.templates import compute_service_hash, render_service_template
 
 
 class TestRenderServiceTemplate:
@@ -88,3 +88,16 @@ class TestRenderServiceTemplate:
         result = render_service_template(template, module)
 
         assert result == template
+
+
+class TestComputeServiceHash:
+    """Test service content hashing."""
+
+    def test_returns_8_char_hex_string(self):
+        """Should return 8-character hex hash for consistency with binary hashes."""
+        content = "[Unit]\nDescription=Test\n[Service]\nExecStart=/bin/app"
+
+        result = compute_service_hash(content)
+
+        assert len(result) == 8
+        assert all(c in "0123456789abcdef" for c in result)
