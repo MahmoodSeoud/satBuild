@@ -147,3 +147,44 @@ class Deployer:
 
         self._ssh.upload(local_path, remote_path)
         self._ssh.run(f"chmod +x '{remote_path}'")
+
+    def clear_vmem_dir(self, vmem_dir: str) -> None:
+        """Clear vmem directory contents and recreate empty.
+
+        Args:
+            vmem_dir: Path to the vmem directory.
+        """
+        self._ssh.run(f"rm -rf '{vmem_dir}'/*", check=False)
+        self._ssh.run(f"mkdir -p '{vmem_dir}'")
+
+    def write_remote_file(self, remote_path: str, content: str) -> None:
+        """Write string content to a remote file.
+
+        Args:
+            remote_path: Path on the remote host.
+            content: The string content to write.
+        """
+        # Use heredoc to write content, avoiding shell escaping issues
+        cmd = f"cat > '{remote_path}' << 'SATDEPLOY_EOF'\n{content}\nSATDEPLOY_EOF"
+        self._ssh.run(cmd)
+
+    def upload_service(self, service_name: str, content: str) -> None:
+        """Upload service file and reload systemd.
+
+        Args:
+            service_name: Name of the service file (e.g. "my-app.service").
+            content: The service file content.
+        """
+        remote_path = f"/etc/systemd/system/{service_name}"
+        self.write_remote_file(remote_path, content)
+        self._ssh.run("systemctl daemon-reload")
+
+    def restore(self, backup_path: str, remote_path: str) -> None:
+        """Restore a backup file to the remote path.
+
+        Args:
+            backup_path: Path to the backup file on remote.
+            remote_path: Path to restore to on remote.
+        """
+        self._ssh.run(f"cp '{backup_path}' '{remote_path}'")
+        self._ssh.run(f"chmod +x '{remote_path}'")

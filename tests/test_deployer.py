@@ -282,3 +282,136 @@ class TestListBackups:
         backups = deployer.list_backups("controller")
 
         assert backups[0]["path"] == "/opt/satdeploy/backups/controller/20240115-143022-abc12345.bak"
+
+
+class TestClearVmemDir:
+    """Test vmem directory clearing."""
+
+    def test_clear_vmem_dir_removes_contents_and_recreates(self):
+        """Should remove vmem directory contents and recreate empty directory."""
+        mock_ssh = Mock()
+        mock_ssh.run.return_value = Mock(exit_code=0)
+
+        deployer = Deployer(
+            ssh=mock_ssh,
+            backup_dir="/opt/satdeploy/backups",
+            max_backups=10,
+        )
+        deployer.clear_vmem_dir("/home/root/a53vmem")
+
+        # Should call rm -rf to clear and mkdir to recreate
+        run_calls = [str(c) for c in mock_ssh.run.call_args_list]
+        assert any("rm -rf" in call and "/home/root/a53vmem" in call for call in run_calls)
+        assert any("mkdir -p" in call and "/home/root/a53vmem" in call for call in run_calls)
+
+
+class TestWriteRemoteFile:
+    """Test writing string content to remote file."""
+
+    def test_write_remote_file_creates_file_with_content(self):
+        """Should write string content to a remote file via shell."""
+        mock_ssh = Mock()
+        mock_ssh.run.return_value = Mock(exit_code=0)
+
+        deployer = Deployer(
+            ssh=mock_ssh,
+            backup_dir="/opt/satdeploy/backups",
+            max_backups=10,
+        )
+
+        content = "[Unit]\nDescription=Test Service\n"
+        deployer.write_remote_file("/etc/systemd/system/test.service", content)
+
+        # Should have called run with content being written to file
+        run_calls = [str(c) for c in mock_ssh.run.call_args_list]
+        assert len(run_calls) == 1
+        assert "/etc/systemd/system/test.service" in run_calls[0]
+        # Verify the content is passed somehow (tee, cat heredoc, etc.)
+        assert "Test Service" in run_calls[0]
+
+
+class TestUploadService:
+    """Test uploading service files with systemd reload."""
+
+    def test_upload_service_writes_file_and_reloads_systemd(self):
+        """Should write service file and reload systemd daemon."""
+        mock_ssh = Mock()
+        mock_ssh.run.return_value = Mock(exit_code=0)
+
+        deployer = Deployer(
+            ssh=mock_ssh,
+            backup_dir="/opt/satdeploy/backups",
+            max_backups=10,
+        )
+
+        content = "[Unit]\nDescription=Test Service\n[Service]\nExecStart=/usr/bin/test\n"
+        deployer.upload_service("test.service", content)
+
+        run_calls = [str(c) for c in mock_ssh.run.call_args_list]
+        # Should write to /etc/systemd/system/
+        assert any("/etc/systemd/system/test.service" in call for call in run_calls)
+        # Should call systemctl daemon-reload
+        assert any("systemctl daemon-reload" in call for call in run_calls)
+
+    def test_upload_service_writes_content_correctly(self):
+        """Should write the service content to the correct path."""
+        mock_ssh = Mock()
+        mock_ssh.run.return_value = Mock(exit_code=0)
+
+        deployer = Deployer(
+            ssh=mock_ssh,
+            backup_dir="/opt/satdeploy/backups",
+            max_backups=10,
+        )
+
+        content = "[Unit]\nDescription=A53 Manager\n"
+        deployer.upload_service("a53-manager.service", content)
+
+        # First call should be the write_remote_file
+        first_call = str(mock_ssh.run.call_args_list[0])
+        assert "/etc/systemd/system/a53-manager.service" in first_call
+        assert "A53 Manager" in first_call
+
+
+class TestRestore:
+    """Test restoring from backup."""
+
+    def test_restore_copies_backup_to_remote_path(self):
+        """Should copy backup file to remote path."""
+        mock_ssh = Mock()
+        mock_ssh.run.return_value = Mock(exit_code=0)
+
+        deployer = Deployer(
+            ssh=mock_ssh,
+            backup_dir="/opt/satdeploy/backups",
+            max_backups=10,
+        )
+
+        deployer.restore(
+            backup_path="/opt/satdeploy/backups/controller/20240115-143022-abc12345.bak",
+            remote_path="/opt/disco/bin/controller",
+        )
+
+        run_calls = [str(c) for c in mock_ssh.run.call_args_list]
+        # Should copy the backup to remote path
+        assert any("cp" in call and "abc12345.bak" in call and "/opt/disco/bin/controller" in call for call in run_calls)
+
+    def test_restore_makes_binary_executable(self):
+        """Should chmod +x the restored binary."""
+        mock_ssh = Mock()
+        mock_ssh.run.return_value = Mock(exit_code=0)
+
+        deployer = Deployer(
+            ssh=mock_ssh,
+            backup_dir="/opt/satdeploy/backups",
+            max_backups=10,
+        )
+
+        deployer.restore(
+            backup_path="/opt/satdeploy/backups/controller/20240115-143022-abc12345.bak",
+            remote_path="/opt/disco/bin/controller",
+        )
+
+        run_calls = [str(c) for c in mock_ssh.run.call_args_list]
+        # Should chmod +x
+        assert any("chmod +x" in call and "/opt/disco/bin/controller" in call for call in run_calls)

@@ -149,12 +149,6 @@ def start_services(
             click.echo(warning(f"Health check failed for {svc_app}"))
 
 
-def restore_backup(ssh: SSHClient, backup_path: str, remote_path: str) -> None:
-    """Restore a backup file to the remote path."""
-    ssh.run(f"cp '{backup_path}' '{remote_path}'")
-    ssh.run(f"chmod +x '{remote_path}'")
-
-
 @click.group(cls=ColoredGroup)
 def main():
     """Deploy binaries to embedded Linux targets."""
@@ -292,7 +286,7 @@ def push(app: str, local: str | None, config_dir: Path | None):
                     deployer.backup(app, remote_path)
 
                 counter.next(f"Restoring {local_hash} from backup")
-                restore_backup(ssh, backup_path, remote_path)
+                deployer.restore(backup_path, remote_path)
 
                 start_services(service_manager, services_to_manage, counter)
 
@@ -670,7 +664,7 @@ def rollback(app: str, hash: str | None, config_dir: Path | None):  # noqa: A002
                 deployer.backup(app, remote_path)
 
             counter.next(f"Restoring {backup_hash} ({backup_timestamp})")
-            restore_backup(ssh, backup_path, remote_path)
+            deployer.restore(backup_path, remote_path)
 
             start_services(service_manager, services_to_manage, counter)
 
