@@ -402,3 +402,76 @@ class TestModuleState:
         assert len(som2_state) == 1
         assert "controller" in som2_state
         assert som2_state["controller"].binary_hash == "hash_ctrl_som2"
+
+
+class TestFleetStatus:
+    """Tests for fleet status queries."""
+
+    @pytest.fixture
+    def history_with_fleet(self, tmp_path):
+        """History with records for multiple modules (fleet)."""
+        db_path = tmp_path / ".satdeploy" / "history.db"
+        h = History(db_path)
+        h.init_db()
+
+        # Deploy to som1
+        h.record(DeploymentRecord(
+            module="som1",
+            app="controller",
+            binary_hash="hash_ctrl_som1",
+            remote_path="/path/controller",
+            action="push",
+            success=True,
+        ))
+        h.record(DeploymentRecord(
+            module="som1",
+            app="csp_server",
+            binary_hash="hash_csp_som1",
+            remote_path="/path/csp_server",
+            action="push",
+            success=True,
+        ))
+
+        # Deploy to som2
+        h.record(DeploymentRecord(
+            module="som2",
+            app="controller",
+            binary_hash="hash_ctrl_som2",
+            remote_path="/path/controller",
+            action="push",
+            success=True,
+        ))
+
+        return h
+
+    def test_get_fleet_status_returns_all_modules(self, history_with_fleet):
+        """get_fleet_status returns state for all modules."""
+        status = history_with_fleet.get_fleet_status()
+
+        assert len(status) == 2
+        assert "som1" in status
+        assert "som2" in status
+
+    def test_get_fleet_status_module_structure(self, history_with_fleet):
+        """Each module in fleet status has correct app structure."""
+        status = history_with_fleet.get_fleet_status()
+
+        # som1 should have 2 apps
+        assert len(status["som1"]) == 2
+        assert "controller" in status["som1"]
+        assert "csp_server" in status["som1"]
+        assert status["som1"]["controller"].binary_hash == "hash_ctrl_som1"
+
+        # som2 should have 1 app
+        assert len(status["som2"]) == 1
+        assert "controller" in status["som2"]
+        assert status["som2"]["controller"].binary_hash == "hash_ctrl_som2"
+
+    def test_get_fleet_status_empty_when_no_records(self, tmp_path):
+        """get_fleet_status returns empty dict when no records exist."""
+        db_path = tmp_path / ".satdeploy" / "history.db"
+        h = History(db_path)
+        h.init_db()
+
+        status = h.get_fleet_status()
+        assert status == {}

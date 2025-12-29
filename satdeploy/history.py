@@ -178,6 +178,23 @@ class History:
 
         return {row["app"]: self._row_to_record(row) for row in rows}
 
+    def get_fleet_status(self) -> dict[str, dict[str, DeploymentRecord]]:
+        """Get state of all modules.
+
+        Returns:
+            Dict mapping module name to dict of app name to DeploymentRecord.
+        """
+        conn = sqlite3.connect(self._db_path)
+        conn.row_factory = sqlite3.Row
+
+        # Get all distinct modules
+        cursor = conn.execute("SELECT DISTINCT module FROM deployments")
+        modules = [row["module"] for row in cursor.fetchall()]
+        conn.close()
+
+        # Get state for each module
+        return {module: self.get_module_state(module) for module in modules}
+
     def _row_to_record(self, row: sqlite3.Row) -> DeploymentRecord:
         """Convert a database row to a DeploymentRecord."""
         return DeploymentRecord(
