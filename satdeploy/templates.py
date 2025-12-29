@@ -19,12 +19,16 @@ def render_service_template(template: str, module: ModuleConfig) -> str:
     Returns:
         The rendered template with all placeholders replaced.
     """
+    replacements = {
+        "csp_addr": str(module.csp_addr),
+        "netmask": str(module.netmask),
+        "interface": str(module.interface),
+        "baudrate": str(module.baudrate),
+        "vmem_path": module.vmem_path,
+    }
     result = template
-    result = re.sub(r"\{\{\s*csp_addr\s*\}\}", str(module.csp_addr), result)
-    result = re.sub(r"\{\{\s*netmask\s*\}\}", str(module.netmask), result)
-    result = re.sub(r"\{\{\s*interface\s*\}\}", str(module.interface), result)
-    result = re.sub(r"\{\{\s*baudrate\s*\}\}", str(module.baudrate), result)
-    result = re.sub(r"\{\{\s*vmem_path\s*\}\}", module.vmem_path, result)
+    for name, value in replacements.items():
+        result = re.sub(rf"\{{\{{\s*{name}\s*\}}\}}", value, result)
     return result
 
 
