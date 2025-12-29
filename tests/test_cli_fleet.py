@@ -261,3 +261,48 @@ class TestDiffCommand:
         assert "app2" in result.output
         assert "match" in result.output.lower()
         assert "differs" in result.output.lower()
+
+
+class TestSyncCommand:
+    """Test the sync command."""
+
+    def test_sync_command_exists(self):
+        """The sync command should exist."""
+        runner = CliRunner()
+        result = runner.invoke(main, ["sync", "--help"])
+        assert result.exit_code == 0
+        assert "source" in result.output.lower()
+        assert "target" in result.output.lower()
+
+    def test_sync_requires_two_modules(self):
+        """Sync should require source and target arguments."""
+        runner = CliRunner()
+        result = runner.invoke(main, ["sync"])
+        assert result.exit_code != 0
+
+    def test_sync_fails_without_config(self, tmp_path):
+        """Sync should fail if config doesn't exist."""
+        runner = CliRunner()
+        config_dir = tmp_path / ".satdeploy"
+
+        result = runner.invoke(
+            main,
+            ["sync", "som1", "som2", "--config-dir", str(config_dir)],
+        )
+
+        assert result.exit_code != 0
+        assert "config" in result.output.lower()
+
+    def test_sync_has_clean_vmem_option(self):
+        """Sync should have --clean-vmem option."""
+        runner = CliRunner()
+        result = runner.invoke(main, ["sync", "--help"])
+        assert result.exit_code == 0
+        assert "--clean-vmem" in result.output
+
+    def test_sync_has_yes_option(self):
+        """Sync should have --yes option to skip confirmation."""
+        runner = CliRunner()
+        result = runner.invoke(main, ["sync", "--help"])
+        assert result.exit_code == 0
+        assert "--yes" in result.output or "-y" in result.output

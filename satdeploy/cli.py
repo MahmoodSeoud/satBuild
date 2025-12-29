@@ -858,3 +858,63 @@ def diff(module1: str, module2: str, config_dir: Path | None):
             status = click.style("differs", fg="yellow")
 
         click.echo(f"  {symbol} {app_name:<16} {hash1:<12} {hash2:<12} {status}")
+
+
+@main.command()
+@click.argument("source")
+@click.argument("target")
+@click.option("--clean-vmem", is_flag=True, help="Clear vmem on target")
+@click.option("--yes", "-y", is_flag=True, help="Skip confirmation")
+@click.option(
+    "--config-dir",
+    type=click.Path(path_type=Path),
+    default=None,
+    help="Config directory (default: ~/.satdeploy)",
+)
+def sync(source: str, target: str, clean_vmem: bool, yes: bool, config_dir: Path | None):
+    """Sync target module to match source.
+
+    SOURCE is the module to sync from.
+    TARGET is the module to sync to.
+    """
+    config_dir = config_dir or DEFAULT_CONFIG_DIR
+    config = Config(config_dir=config_dir)
+
+    if config.load() is None:
+        raise SatDeployError(
+            f"Config not found at {config.config_path}. Run 'satdeploy init' first."
+        )
+
+    history = get_history(config_dir)
+
+    # Get diff to show what will be synced
+    state_source = history.get_module_state(source)
+    state_target = history.get_module_state(target)
+
+    all_apps = set(state_source.keys()) | set(state_target.keys())
+    apps_to_sync = []
+
+    for app_name in sorted(all_apps):
+        hash_source = state_source[app_name].binary_hash if app_name in state_source else None
+        hash_target = state_target[app_name].binary_hash if app_name in state_target else None
+
+        if hash_source != hash_target:
+            apps_to_sync.append(app_name)
+
+    if not apps_to_sync:
+        click.echo(f"Modules {source} and {target} are already in sync.")
+        return
+
+    click.echo(click.style(f"Syncing {target} to match {source}", bold=True))
+    click.echo("")
+    click.echo(f"Apps to sync: {', '.join(apps_to_sync)}")
+    if clean_vmem:
+        click.echo("Will also clear vmem directories.")
+    click.echo("")
+
+    if not yes:
+        if not click.confirm("Proceed?"):
+            click.echo("Aborted.")
+            return
+
+    click.echo(success(f"Sync from {source} to {target} would proceed (not yet implemented)"))
