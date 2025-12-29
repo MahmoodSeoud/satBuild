@@ -178,3 +178,13 @@ class Deployer:
         remote_path = f"/etc/systemd/system/{service_name}"
         self.write_remote_file(remote_path, content)
         self._ssh.run("systemctl daemon-reload")
+
+    def restore(self, backup_path: str, remote_path: str) -> None:
+        """Restore a backup file to the remote path.
+
+        Args:
+            backup_path: Path to the backup file on remote.
+            remote_path: Path to restore to on remote.
+        """
+        self._ssh.run(f"cp '{backup_path}' '{remote_path}'")
+        self._ssh.run(f"chmod +x '{remote_path}'")

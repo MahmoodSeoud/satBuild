@@ -371,3 +371,47 @@ class TestUploadService:
         first_call = str(mock_ssh.run.call_args_list[0])
         assert "/etc/systemd/system/a53-manager.service" in first_call
         assert "A53 Manager" in first_call
+
+
+class TestRestore:
+    """Test restoring from backup."""
+
+    def test_restore_copies_backup_to_remote_path(self):
+        """Should copy backup file to remote path."""
+        mock_ssh = Mock()
+        mock_ssh.run.return_value = Mock(exit_code=0)
+
+        deployer = Deployer(
+            ssh=mock_ssh,
+            backup_dir="/opt/satdeploy/backups",
+            max_backups=10,
+        )
+
+        deployer.restore(
+            backup_path="/opt/satdeploy/backups/controller/20240115-143022-abc12345.bak",
+            remote_path="/opt/disco/bin/controller",
+        )
+
+        run_calls = [str(c) for c in mock_ssh.run.call_args_list]
+        # Should copy the backup to remote path
+        assert any("cp" in call and "abc12345.bak" in call and "/opt/disco/bin/controller" in call for call in run_calls)
+
+    def test_restore_makes_binary_executable(self):
+        """Should chmod +x the restored binary."""
+        mock_ssh = Mock()
+        mock_ssh.run.return_value = Mock(exit_code=0)
+
+        deployer = Deployer(
+            ssh=mock_ssh,
+            backup_dir="/opt/satdeploy/backups",
+            max_backups=10,
+        )
+
+        deployer.restore(
+            backup_path="/opt/satdeploy/backups/controller/20240115-143022-abc12345.bak",
+            remote_path="/opt/disco/bin/controller",
+        )
+
+        run_calls = [str(c) for c in mock_ssh.run.call_args_list]
+        # Should chmod +x
+        assert any("chmod +x" in call and "/opt/disco/bin/controller" in call for call in run_calls)
