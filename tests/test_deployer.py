@@ -282,3 +282,24 @@ class TestListBackups:
         backups = deployer.list_backups("controller")
 
         assert backups[0]["path"] == "/opt/satdeploy/backups/controller/20240115-143022-abc12345.bak"
+
+
+class TestClearVmemDir:
+    """Test vmem directory clearing."""
+
+    def test_clear_vmem_dir_removes_contents_and_recreates(self):
+        """Should remove vmem directory contents and recreate empty directory."""
+        mock_ssh = Mock()
+        mock_ssh.run.return_value = Mock(exit_code=0)
+
+        deployer = Deployer(
+            ssh=mock_ssh,
+            backup_dir="/opt/satdeploy/backups",
+            max_backups=10,
+        )
+        deployer.clear_vmem_dir("/home/root/a53vmem")
+
+        # Should call rm -rf to clear and mkdir to recreate
+        run_calls = [str(c) for c in mock_ssh.run.call_args_list]
+        assert any("rm -rf" in call and "/home/root/a53vmem" in call for call in run_calls)
+        assert any("mkdir -p" in call and "/home/root/a53vmem" in call for call in run_calls)

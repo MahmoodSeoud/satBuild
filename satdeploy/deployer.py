@@ -147,3 +147,12 @@ class Deployer:
 
         self._ssh.upload(local_path, remote_path)
         self._ssh.run(f"chmod +x '{remote_path}'")
+
+    def clear_vmem_dir(self, vmem_dir: str) -> None:
+        """Clear vmem directory contents and recreate empty.
+
+        Args:
+            vmem_dir: Path to the vmem directory.
+        """
+        self._ssh.run(f"rm -rf '{vmem_dir}'/*", check=False)
+        self._ssh.run(f"mkdir -p '{vmem_dir}'")
