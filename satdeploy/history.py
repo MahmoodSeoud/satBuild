@@ -21,6 +21,7 @@ class DeploymentRecord:
     git_hash: Optional[str] = None
     backup_path: Optional[str] = None
     error_message: Optional[str] = None
+    service_hash: Optional[str] = None
     id: Optional[int] = None
 
 

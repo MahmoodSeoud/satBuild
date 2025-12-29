@@ -82,6 +82,29 @@ class TestDeploymentRecordModule:
         )
         assert record.module == "default"
 
+    def test_deployment_record_has_service_hash_field(self):
+        """DeploymentRecord has service_hash field for tracking service file version."""
+        record = DeploymentRecord(
+            app="controller",
+            binary_hash="a1b2c3d4",
+            remote_path="/opt/disco/bin/controller",
+            action="push",
+            success=True,
+            service_hash="abcd1234",
+        )
+        assert record.service_hash == "abcd1234"
+
+    def test_service_hash_defaults_to_none(self):
+        """Service hash defaults to None for apps without service templates."""
+        record = DeploymentRecord(
+            app="controller",
+            binary_hash="a1b2c3d4",
+            remote_path="/opt/disco/bin/controller",
+            action="push",
+            success=True,
+        )
+        assert record.service_hash is None
+
 
 class TestHistoryRecording:
     """Tests for recording deployments."""
