@@ -56,6 +56,33 @@ class TestHistoryInit:
         assert expected == columns
 
 
+class TestDeploymentRecordModule:
+    """Tests for module field in DeploymentRecord."""
+
+    def test_deployment_record_has_module_field(self):
+        """DeploymentRecord has a module field."""
+        record = DeploymentRecord(
+            module="som1",
+            app="controller",
+            binary_hash="a1b2c3d4",
+            remote_path="/opt/disco/bin/controller",
+            action="push",
+            success=True,
+        )
+        assert record.module == "som1"
+
+    def test_module_defaults_to_default(self):
+        """Module field defaults to 'default' for backward compatibility."""
+        record = DeploymentRecord(
+            app="controller",
+            binary_hash="a1b2c3d4",
+            remote_path="/opt/disco/bin/controller",
+            action="push",
+            success=True,
+        )
+        assert record.module == "default"
+
+
 class TestHistoryRecording:
     """Tests for recording deployments."""
 

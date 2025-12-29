@@ -16,6 +16,7 @@ class DeploymentRecord:
     remote_path: str
     action: str  # 'push' or 'rollback'
     success: bool
+    module: str = "default"
     timestamp: Optional[str] = None
     git_hash: Optional[str] = None
     backup_path: Optional[str] = None
