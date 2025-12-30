@@ -13,6 +13,7 @@ class TestRenderServiceTemplate:
         """Should replace {{ csp_addr }} with module's csp_addr value."""
         module = ModuleConfig(
             name="som1",
+            transport="ssh",
             host="192.168.1.10",
             user="root",
             csp_addr=5421,
@@ -31,6 +32,7 @@ class TestRenderServiceTemplate:
         """Should replace all supported placeholders."""
         module = ModuleConfig(
             name="som1",
+            transport="ssh",
             host="192.168.1.10",
             user="root",
             csp_addr=5421,
@@ -57,6 +59,7 @@ class TestRenderServiceTemplate:
         """Should handle placeholders with varying whitespace."""
         module = ModuleConfig(
             name="som1",
+            transport="ssh",
             host="192.168.1.10",
             user="root",
             csp_addr=5421,
@@ -75,6 +78,7 @@ class TestRenderServiceTemplate:
         """Should return template unchanged when no placeholders exist."""
         module = ModuleConfig(
             name="som1",
+            transport="ssh",
             host="192.168.1.10",
             user="root",
             csp_addr=5421,

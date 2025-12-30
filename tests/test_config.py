@@ -187,6 +187,7 @@ class TestModuleConfig:
         """ModuleConfig should hold all module-specific settings."""
         module = ModuleConfig(
             name="som1",
+            transport="ssh",
             host="192.168.1.10",
             user="root",
             csp_addr=5421,
@@ -197,6 +198,7 @@ class TestModuleConfig:
         )
 
         assert module.name == "som1"
+        assert module.transport == "ssh"
         assert module.host == "192.168.1.10"
         assert module.user == "root"
         assert module.csp_addr == 5421
@@ -473,6 +475,83 @@ class TestGetAllAppNames:
         names = config.get_all_app_names()
 
         assert names == []
+
+
+class TestCSPModuleConfig:
+    """Test CSP-specific module configuration."""
+
+    def test_module_config_with_csp_transport(self, tmp_path):
+        """ModuleConfig should support CSP transport type."""
+        config_file = tmp_path / "config.yaml"
+        config_data = {
+            "modules": {
+                "som1-csp": {
+                    "transport": "csp",
+                    "zmq_endpoint": "tcp://localhost:4040",
+                    "agent_node": 5424,
+                    "appsys_node": 5421,
+                },
+            },
+            "appsys": {},
+            "apps": {},
+        }
+        config_file.write_text(yaml.dump(config_data))
+
+        config = Config(config_dir=tmp_path)
+        config.load()
+        module = config.get_module("som1-csp")
+
+        assert module.transport == "csp"
+        assert module.zmq_endpoint == "tcp://localhost:4040"
+        assert module.agent_node == 5424
+        assert module.appsys_node == 5421
+
+    def test_module_config_defaults_to_ssh_transport(self, tmp_path):
+        """ModuleConfig should default to SSH transport."""
+        config_file = tmp_path / "config.yaml"
+        config_data = {
+            "modules": {
+                "som1": {
+                    "host": "192.168.1.10",
+                    "user": "root",
+                },
+            },
+            "appsys": {},
+            "apps": {},
+        }
+        config_file.write_text(yaml.dump(config_data))
+
+        config = Config(config_dir=tmp_path)
+        config.load()
+        module = config.get_module("som1")
+
+        assert module.transport == "ssh"
+        assert module.host == "192.168.1.10"
+        assert module.user == "root"
+
+    def test_app_config_with_param_name(self, tmp_path):
+        """AppConfig should support param_name for CSP control."""
+        config_file = tmp_path / "config.yaml"
+        config_data = {
+            "modules": {},
+            "appsys": {},
+            "apps": {
+                "dipp": {
+                    "local": "./build/dipp",
+                    "remote": "/usr/bin/dipp",
+                    "param": "mng_dipp",
+                    "run_node": 5423,
+                },
+            },
+        }
+        config_file.write_text(yaml.dump(config_data))
+
+        config = Config(config_dir=tmp_path)
+        config.load()
+        app = config.get_app("dipp")
+
+        assert app.param == "mng_dipp"
+        assert app.run_node == 5423
 
 
 class TestGetAppsys:

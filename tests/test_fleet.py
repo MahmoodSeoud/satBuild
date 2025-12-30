@@ -34,6 +34,7 @@ class TestGetStatus:
         config.get_modules.return_value = {
             "som1": ModuleConfig(
                 name="som1",
+            transport="ssh",
                 host="192.168.1.10",
                 user="root",
                 csp_addr=5421,
@@ -63,6 +64,7 @@ class TestGetStatus:
         config.get_modules.return_value = {
             "som1": ModuleConfig(
                 name="som1",
+            transport="ssh",
                 host="192.168.1.10",
                 user="root",
                 csp_addr=5421,
@@ -92,6 +94,7 @@ class TestGetStatus:
         config.get_modules.return_value = {
             "som1": ModuleConfig(
                 name="som1",
+            transport="ssh",
                 host="192.168.1.10",
                 user="root",
                 csp_addr=5421,
@@ -120,6 +123,7 @@ class TestGetStatus:
         config.get_modules.return_value = {
             "som1": ModuleConfig(
                 name="som1",
+            transport="ssh",
                 host="192.168.1.10",
                 user="root",
                 csp_addr=5421,
@@ -149,6 +153,7 @@ class TestGetStatus:
         config.get_modules.return_value = {
             "som1": ModuleConfig(
                 name="som1",
+            transport="ssh",
                 host="192.168.1.10",
                 user="root",
                 csp_addr=5421,
@@ -191,6 +196,7 @@ class TestGetStatus:
         config.get_modules.return_value = {
             "som1": ModuleConfig(
                 name="som1",
+            transport="ssh",
                 host="192.168.1.10",
                 user="root",
                 csp_addr=5421,
@@ -361,6 +367,7 @@ class TestSyncModules:
         config = Mock()
         config.get_module.return_value = ModuleConfig(
             name="som2",
+            transport="ssh",
             host="192.168.1.11",
             user="root",
             csp_addr=5475,
@@ -406,6 +413,7 @@ class TestSyncModules:
         config = Mock()
         config.get_module.return_value = ModuleConfig(
             name="som2",
+            transport="ssh",
             host="192.168.1.11",
             user="root",
             csp_addr=5475,
@@ -450,6 +458,7 @@ class TestSyncModules:
         config = Mock()
         config.get_module.return_value = ModuleConfig(
             name="som2",
+            transport="ssh",
             host="192.168.1.11",
             user="root",
             csp_addr=5475,
@@ -493,6 +502,7 @@ class TestSyncModules:
 
         target_module = ModuleConfig(
             name="som2",
+            transport="ssh",
             host="192.168.1.11",
             user="root",
             csp_addr=5475,

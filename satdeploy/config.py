@@ -9,16 +9,32 @@ import yaml
 
 @dataclass
 class ModuleConfig:
-    """Configuration for a deployment target module."""
+    """Configuration for a deployment target module.
+
+    Supports two transport types:
+    - "ssh": Traditional SSH/SFTP (requires host, user)
+    - "csp": CSP/DTP over ZMQ (requires zmq_endpoint, agent_node)
+    """
 
     name: str
-    host: str
-    user: str
-    csp_addr: int
-    netmask: int
-    interface: int
-    baudrate: int
-    vmem_path: str
+    transport: str  # "ssh" or "csp"
+
+    # SSH transport fields
+    host: Optional[str] = None
+    user: Optional[str] = None
+
+    # CSP transport fields
+    zmq_endpoint: Optional[str] = None
+    agent_node: Optional[int] = None
+    appsys_node: Optional[int] = None
+    ground_node: int = 4040  # Default ground station node address
+
+    # Common fields
+    csp_addr: int = 0
+    netmask: int = 0
+    interface: int = 0
+    baudrate: int = 0
+    vmem_path: str = ""
 
 
 @dataclass
@@ -28,9 +44,13 @@ class AppConfig:
     name: str
     local: str
     remote: str
-    service: str | None
-    service_template: str | None
-    vmem_dir: str | None
+    service: str | None = None
+    service_template: str | None = None
+    vmem_dir: str | None = None
+
+    # CSP-specific fields for libparam control
+    param: str | None = None  # libparam name (e.g., "mng_dipp")
+    run_node: int | None = None  # CSP node where app runs
 
 DEFAULT_CONFIG_DIR = Path.home() / ".satdeploy"
 
@@ -130,6 +150,8 @@ class Config:
             service=app_data.get("service"),
             service_template=app_data.get("service_template"),
             vmem_dir=app_data.get("vmem_dir"),
+            param=app_data.get("param"),
+            run_node=app_data.get("run_node"),
         )
 
     @property
@@ -174,10 +196,21 @@ class Config:
 
         result = {}
         for name, mod in modules_data.items():
+            # Determine transport type (defaults to "ssh")
+            transport = mod.get("transport", "ssh")
+
             result[name] = ModuleConfig(
                 name=name,
-                host=mod["host"],
-                user=mod["user"],
+                transport=transport,
+                # SSH fields
+                host=mod.get("host"),
+                user=mod.get("user"),
+                # CSP fields
+                zmq_endpoint=mod.get("zmq_endpoint"),
+                agent_node=mod.get("agent_node"),
+                appsys_node=mod.get("appsys_node"),
+                ground_node=mod.get("ground_node", 4040),
+                # Common fields
                 csp_addr=mod.get("csp_addr", 0),
                 netmask=appsys.get("netmask", 0),
                 interface=appsys.get("interface", 0),
