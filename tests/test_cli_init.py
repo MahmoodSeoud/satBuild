@@ -29,7 +29,7 @@ class TestInitCommand:
         result = runner.invoke(
             main,
             ["init", "--config-dir", str(config_dir)],
-            input="\n192.168.1.50\nroot\n\n",  # module, host, user, no more modules
+            input="\n\n192.168.1.50\nroot\n\n",  # module, transport(ssh), host, user, no more
         )
 
         assert result.exit_code == 0
@@ -43,7 +43,7 @@ class TestInitCommand:
         result = runner.invoke(
             main,
             ["init", "--config-dir", str(config_dir)],
-            input="\n192.168.1.50\nroot\n\n",  # module, host, user, no more modules
+            input="\n\n192.168.1.50\nroot\n\n",  # module, transport(ssh), host, user, no more
         )
 
         assert "host" in result.output.lower() or "Target host" in result.output
@@ -56,7 +56,7 @@ class TestInitCommand:
         result = runner.invoke(
             main,
             ["init", "--config-dir", str(config_dir)],
-            input="\n192.168.1.50\nroot\n\n",  # module, host, user, no more modules
+            input="\n\n192.168.1.50\nroot\n\n",  # module, transport(ssh), host, user, no more
         )
 
         assert "user" in result.output.lower()
@@ -69,7 +69,7 @@ class TestInitCommand:
         runner.invoke(
             main,
             ["init", "--config-dir", str(config_dir)],
-            input="som1\n10.0.0.100\nadmin\n\n",  # module, host, user, no more modules
+            input="som1\n\n10.0.0.100\nadmin\n\n",  # module, transport(ssh), host, user, no more
         )
 
         config_file = config_dir / "config.yaml"
@@ -77,6 +77,7 @@ class TestInitCommand:
 
         assert config["modules"]["som1"]["host"] == "10.0.0.100"
         assert config["modules"]["som1"]["user"] == "admin"
+        assert config["modules"]["som1"]["transport"] == "ssh"
 
     def test_init_saves_multiple_modules(self, tmp_path):
         """Init should save multiple modules when user adds more."""
@@ -86,8 +87,8 @@ class TestInitCommand:
         runner.invoke(
             main,
             ["init", "--config-dir", str(config_dir)],
-            # som1, host, user, yes add more, som2, host, user, no more
-            input="som1\n10.0.0.100\nroot\ny\nsom2\n10.0.0.101\nroot\n\n",
+            # som1, transport, host, user, yes add more, som2, transport, host, user, no more
+            input="som1\n\n10.0.0.100\nroot\ny\nsom2\n\n10.0.0.101\nroot\n\n",
         )
 
         config_file = config_dir / "config.yaml"
@@ -106,7 +107,7 @@ class TestInitCommand:
         runner.invoke(
             main,
             ["init", "--config-dir", str(config_dir)],
-            input="\n192.168.1.50\nroot\n\n",  # module, host, user, no more modules
+            input="\n\n192.168.1.50\nroot\n\n",  # module, transport(ssh), host, user, no more
         )
 
         config_file = config_dir / "config.yaml"
@@ -116,6 +117,27 @@ class TestInitCommand:
         assert config["max_backups"] == 10
         assert "example_app" in config["apps"]
         assert config["apps"]["example_app"]["service"] is None
+
+    def test_init_csp_transport(self, tmp_path):
+        """Init should support CSP transport configuration."""
+        runner = CliRunner()
+        config_dir = tmp_path / ".satdeploy"
+
+        runner.invoke(
+            main,
+            ["init", "--config-dir", str(config_dir)],
+            # module, csp, zmq_endpoint, agent_node, ground_node, appsys_node, no more
+            input="sat1\ncsp\ntcp://localhost:4040\n5424\n4040\n10\n\n",
+        )
+
+        config_file = config_dir / "config.yaml"
+        config = yaml.safe_load(config_file.read_text())
+
+        assert config["modules"]["sat1"]["transport"] == "csp"
+        assert config["modules"]["sat1"]["zmq_endpoint"] == "tcp://localhost:4040"
+        assert config["modules"]["sat1"]["agent_node"] == 5424
+        assert config["modules"]["sat1"]["ground_node"] == 4040
+        assert config["modules"]["sat1"]["appsys_node"] == 10
 
     def test_init_warns_if_config_exists(self, tmp_path):
         """Init should warn if config already exists."""
@@ -143,7 +165,7 @@ class TestInitCommand:
         result = runner.invoke(
             main,
             ["init", "--config-dir", str(config_dir)],
-            input="y\n\n192.168.1.50\nroot\n\n",  # Overwrite, module, host, user, no more
+            input="y\n\n\n192.168.1.50\nroot\n\n",  # Overwrite, module, transport, host, user, no more
         )
 
         config = yaml.safe_load((config_dir / "config.yaml").read_text())
@@ -161,7 +183,7 @@ class TestInitPolishedOutput:
         result = runner.invoke(
             main,
             ["init", "--config-dir", str(config_dir)],
-            input="\n192.168.1.50\nroot\n\n",  # module, host, user, no more modules
+            input="\n\n192.168.1.50\nroot\n\n",  # module, transport, host, user, no more
             color=True,
         )
 

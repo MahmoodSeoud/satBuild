@@ -1,5 +1,6 @@
 """CLI entry point for satdeploy."""
 
+import hashlib
 import os
 from datetime import datetime
 from pathlib import Path
@@ -14,6 +15,37 @@ from satdeploy.output import success, warning, step, SYMBOLS, SatDeployError, Co
 from satdeploy.services import ServiceManager, ServiceStatus
 from satdeploy.ssh import SSHClient, SSHError
 from satdeploy.templates import render_service_template, compute_service_hash
+from satdeploy.transport import Transport, SSHTransport, CSPTransport, TransportError
+
+
+def get_transport(module: ModuleConfig, backup_dir: str) -> Transport:
+    """Create the appropriate transport for a module.
+
+    Args:
+        module: The module configuration.
+        backup_dir: Remote backup directory path.
+
+    Returns:
+        Transport instance (SSHTransport or CSPTransport).
+
+    Raises:
+        ValueError: If transport type is unknown.
+    """
+    if module.transport == "ssh":
+        return SSHTransport(
+            host=module.host,
+            user=module.user,
+            backup_dir=backup_dir,
+        )
+    elif module.transport == "csp":
+        return CSPTransport(
+            zmq_endpoint=module.zmq_endpoint,
+            agent_node=module.agent_node,
+            ground_node=module.ground_node,
+            backup_dir=backup_dir,
+        )
+    else:
+        raise ValueError(f"Unknown transport type: {module.transport}")
 
 
 def get_history(config_dir: Path) -> History:
@@ -239,9 +271,48 @@ def init(config_dir: Path | None):
     modules = {}
     while True:
         module_name = click.prompt("Module name", default="default" if not modules else None)
-        host = click.prompt(f"  {module_name} host (IP or hostname)")
-        user = click.prompt(f"  {module_name} user", default="root")
-        modules[module_name] = {"host": host, "user": user}
+        transport = click.prompt(
+            f"  {module_name} transport type",
+            type=click.Choice(["ssh", "csp"]),
+            default="ssh",
+        )
+
+        if transport == "ssh":
+            host = click.prompt(f"  {module_name} host (IP or hostname)")
+            user = click.prompt(f"  {module_name} user", default="root")
+            modules[module_name] = {
+                "transport": "ssh",
+                "host": host,
+                "user": user,
+            }
+        else:  # csp
+            zmq_endpoint = click.prompt(
+                f"  {module_name} ZMQ endpoint",
+                default="tcp://localhost:4040",
+            )
+            agent_node = click.prompt(
+                f"  {module_name} agent CSP node",
+                type=int,
+                default=5424,
+            )
+            ground_node = click.prompt(
+                f"  {module_name} ground CSP node",
+                type=int,
+                default=4040,
+            )
+            appsys_node = click.prompt(
+                f"  {module_name} app-sys-manager CSP node",
+                type=int,
+                default=10,
+            )
+            modules[module_name] = {
+                "transport": "csp",
+                "zmq_endpoint": zmq_endpoint,
+                "agent_node": agent_node,
+                "ground_node": ground_node,
+                "appsys_node": appsys_node,
+            }
+
         click.echo("")
         if not click.confirm("Add another module?", default=False):
             break
@@ -255,6 +326,8 @@ def init(config_dir: Path | None):
                 "local": "/path/to/local/binary",
                 "remote": "/path/to/remote/binary",
                 "service": None,
+                "param": None,
+                "run_node": None,
             },
         },
     }
@@ -315,7 +388,6 @@ def push(
     # Get target module
     try:
         module_config = config.get_module(module)
-        target = {"host": module_config.host, "user": module_config.user}
     except KeyError:
         raise SatDeployError(f"Module '{module}' not found in config")
 
@@ -332,6 +404,78 @@ def push(
 
     history = get_history(config_dir)
 
+    # CSP transport: use transport abstraction
+    if module_config.transport == "csp":
+        transport = get_transport(module_config, config.backup_dir)
+        click.echo(f"Connecting to {module_config.zmq_endpoint}...")
+
+        try:
+            transport.connect()
+
+            for app in apps:
+                app_config = get_app_config_or_error(config, app)
+                local_path = os.path.expanduser(local or app_config.local) if len(apps) == 1 else os.path.expanduser(app_config.local)
+                remote_path = app_config.remote
+
+                click.echo(f"Deploying {app} via CSP...")
+
+                result = transport.deploy(
+                    app_name=app,
+                    local_path=local_path,
+                    remote_path=remote_path,
+                    param_name=app_config.param,
+                    appsys_node=module_config.appsys_node,
+                    run_node=app_config.run_node,
+                )
+
+                if result.success:
+                    # Compute local hash for history
+                    sha256 = hashlib.sha256()
+                    with open(local_path, "rb") as f:
+                        for chunk in iter(lambda: f.read(8192), b""):
+                            sha256.update(chunk)
+                    local_hash = sha256.hexdigest()[:8]
+
+                    history.record(DeploymentRecord(
+                        module=module,
+                        app=app,
+                        binary_hash=local_hash,
+                        remote_path=remote_path,
+                        backup_path=result.backup_path,
+                        action="push",
+                        success=True,
+                    ))
+                    click.echo(success(f"Deployed {app} ({local_hash})"))
+                else:
+                    history.record(DeploymentRecord(
+                        module=module,
+                        app=app,
+                        binary_hash="",
+                        remote_path=remote_path,
+                        action="push",
+                        success=False,
+                        error_message=result.error_message,
+                    ))
+                    raise SatDeployError(result.error_message or "Deploy failed")
+
+        except TransportError as e:
+            history.record(DeploymentRecord(
+                module=module,
+                app=apps[0] if apps else "",
+                binary_hash="",
+                remote_path="",
+                action="push",
+                success=False,
+                error_message=str(e),
+            ))
+            raise SatDeployError(str(e))
+        finally:
+            transport.disconnect()
+
+        return
+
+    # SSH transport: use direct SSH connection
+    target = {"host": module_config.host, "user": module_config.user}
     click.echo(f"Connecting to {target['host']}...")
 
     try:
@@ -494,12 +638,74 @@ def status(module: str, config_dir: Path | None):
 
     try:
         module_config = config.get_module(module)
-        target = {"host": module_config.host, "user": module_config.user}
     except KeyError:
         raise SatDeployError(f"Module '{module}' not found in config")
     apps = config.apps
     history = get_history(config_dir)
 
+    # CSP transport: use transport abstraction
+    if module_config.transport == "csp":
+        transport = get_transport(module_config, config.backup_dir)
+        click.echo(f"Target: {module_config.zmq_endpoint} (node {module_config.agent_node})")
+        click.echo("")
+
+        if not apps:
+            click.echo("No apps configured.")
+            return
+
+        # Print header
+        header = f"    {'APP':<16}\t{'STATUS':<14}\t{'HASH':<10}\t{'TIMESTAMP'}"
+        click.echo(click.style(header, fg="bright_black"))
+        click.echo(click.style("    " + "-" * 60, fg="bright_black"))
+
+        try:
+            transport.connect()
+            app_statuses = transport.get_status()
+
+            for app_name, app_config_dict in apps.items():
+                app_status = app_statuses.get(app_name)
+
+                if app_status:
+                    hash_display = app_status.binary_hash or "-"
+                    if app_status.running:
+                        symbol = click.style(SYMBOLS["check"], fg="green")
+                        status_text = "running"
+                        status_color = "green"
+                    else:
+                        symbol = click.style(SYMBOLS["bullet"], fg="yellow")
+                        status_text = "stopped"
+                        status_color = "yellow"
+
+                    # Get timestamp from history
+                    last_deploy = history.get_last_deployment(app_name)
+                    timestamp_display = format_iso_timestamp(last_deploy.timestamp) if last_deploy and last_deploy.success else "-"
+                else:
+                    symbol = click.style(SYMBOLS["bullet"], fg="yellow")
+                    status_text = "not deployed"
+                    status_color = "yellow"
+                    hash_display = "-"
+                    timestamp_display = "-"
+
+                name_col = f"{app_name:<16}"
+                status_col = f"{status_text:<14}"
+                hash_col = f"{hash_display:<10}"
+
+                click.echo(
+                    f"  {symbol} {name_col}\t"
+                    f"{click.style(status_col, fg=status_color)}\t"
+                    f"{click.style(hash_col, fg='white')}\t"
+                    f"{click.style(timestamp_display, fg='bright_black')}"
+                )
+
+        except TransportError as e:
+            raise SatDeployError(str(e))
+        finally:
+            transport.disconnect()
+
+        return
+
+    # SSH transport: use direct SSH connection
+    target = {"host": module_config.host, "user": module_config.user}
     click.echo(f"Target: {target['host']} ({target['user']})")
     click.echo("")
 
@@ -607,7 +813,6 @@ def list_backups(app: str, module: str, config_dir: Path | None):
 
     try:
         module_config = config.get_module(module)
-        target = {"host": module_config.host, "user": module_config.user}
     except KeyError:
         raise SatDeployError(f"Module '{module}' not found in config")
     history = get_history(config_dir)
@@ -615,6 +820,80 @@ def list_backups(app: str, module: str, config_dir: Path | None):
     # Get currently deployed version from history
     last_deploy = history.get_last_deployment(app)
 
+    # CSP transport: use transport abstraction
+    if module_config.transport == "csp":
+        transport = get_transport(module_config, config.backup_dir)
+
+        try:
+            transport.connect()
+            backup_infos = transport.list_backups(app)
+
+            # Get currently deployed hash
+            current_hash = None
+            if last_deploy and last_deploy.success:
+                current_hash = last_deploy.binary_hash
+
+            # Convert BackupInfo to dict format and deduplicate
+            seen_keys = {}
+            for backup in backup_infos:
+                key = backup.binary_hash or backup.version
+                if key and key not in seen_keys:
+                    seen_keys[key] = {
+                        "hash": backup.binary_hash,
+                        "timestamp": backup.timestamp,
+                        "path": backup.path,
+                    }
+
+            # Add currently deployed version if not in backups
+            if current_hash and current_hash not in seen_keys:
+                timestamp_display = format_iso_timestamp(last_deploy.timestamp)
+                seen_keys[current_hash] = {
+                    "hash": current_hash,
+                    "timestamp": timestamp_display,
+                }
+
+            # Build unified list sorted by timestamp (newest first)
+            versions = list(seen_keys.values())
+            versions.sort(key=lambda v: v.get("timestamp", ""), reverse=True)
+
+            if not versions:
+                click.echo(f"No versions found for {app}.")
+                return
+
+            click.echo(click.style(f"Versions for {app}:", bold=True))
+            click.echo("")
+            # Print header
+            header = f"    {'HASH':<10}\t{'TIMESTAMP':<20}\t{'STATUS'}"
+            click.echo(click.style(header, fg="bright_black"))
+            click.echo(click.style("    " + "-" * 45, fg="bright_black"))
+
+            # Show all versions, arrow on deployed one
+            for version in versions:
+                hash_display = version.get("hash") or "-"
+                timestamp_display = version.get("timestamp") or "-"
+                is_deployed = hash_display == current_hash
+
+                if is_deployed:
+                    bullet = click.style(SYMBOLS["arrow"], fg="green")
+                    hash_col = click.style(f"{hash_display:<10}", fg="green")
+                    status_col = click.style("deployed", fg="green")
+                else:
+                    bullet = click.style(SYMBOLS["bullet"], fg="blue")
+                    hash_col = click.style(f"{hash_display:<10}", fg="blue")
+                    status_col = click.style("backup", fg="blue")
+
+                timestamp_col = click.style(f"{timestamp_display:<20}", fg="bright_black")
+                click.echo(f"  {bullet} {hash_col}\t{timestamp_col}\t{status_col}")
+
+        except TransportError as e:
+            raise SatDeployError(str(e))
+        finally:
+            transport.disconnect()
+
+        return
+
+    # SSH transport: use direct SSH connection
+    target = {"host": module_config.host, "user": module_config.user}
     with SSHClient(host=target["host"], user=target["user"]) as ssh:
         deployer = Deployer(
             ssh=ssh,
@@ -715,12 +994,65 @@ def rollback(app: str, hash: str | None, module: str, config_dir: Path | None): 
     service = app_config.service
     try:
         module_config = config.get_module(module)
-        target = {"host": module_config.host, "user": module_config.user}
     except KeyError:
         raise SatDeployError(f"Module '{module}' not found in config")
     history = get_history(config_dir)
     backup_path = None
 
+    # CSP transport: use transport abstraction
+    if module_config.transport == "csp":
+        transport = get_transport(module_config, config.backup_dir)
+        click.echo(f"Connecting to {module_config.zmq_endpoint}...")
+
+        try:
+            transport.connect()
+
+            click.echo(f"Rolling back {app} via CSP...")
+            result = transport.rollback(
+                app_name=app,
+                backup_hash=target_hash,
+            )
+
+            if result.success:
+                history.record(DeploymentRecord(
+                    module=module,
+                    app=app,
+                    binary_hash=target_hash or "previous",
+                    remote_path=remote_path,
+                    action="rollback",
+                    success=True,
+                ))
+                click.echo(success(f"Rolled back {app}"))
+            else:
+                history.record(DeploymentRecord(
+                    module=module,
+                    app=app,
+                    binary_hash="",
+                    remote_path=remote_path,
+                    action="rollback",
+                    success=False,
+                    error_message=result.error_message,
+                ))
+                raise SatDeployError(result.error_message or "Rollback failed")
+
+        except TransportError as e:
+            history.record(DeploymentRecord(
+                module=module,
+                app=app,
+                binary_hash="",
+                remote_path=remote_path,
+                action="rollback",
+                success=False,
+                error_message=str(e),
+            ))
+            raise SatDeployError(str(e))
+        finally:
+            transport.disconnect()
+
+        return
+
+    # SSH transport: use direct SSH connection
+    target = {"host": module_config.host, "user": module_config.user}
     click.echo(f"Connecting to {target['host']}...")
 
     try:
