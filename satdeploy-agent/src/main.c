@@ -30,7 +30,7 @@
 #define DEFAULT_BAUDRATE 115200
 #define DEFAULT_NETMASK 8
 
-static volatile int running = 1;
+volatile int running = 1;
 
 static void signal_handler(int sig) {
     (void)sig;
@@ -213,11 +213,14 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
-    /* Initialize deploy handler */
+    /* Initialize deploy handler FIRST (binds to port 20) */
     if (deploy_handler_init() != 0) {
         printf("Error: Failed to initialize deploy handler\n");
         return 1;
     }
+
+    /* Bind CSP service handler for pings and other standard services */
+    csp_bind_callback(csp_service_handler, CSP_ANY);
 
     /* Start router task */
     pthread_t router_handle;
@@ -225,10 +228,8 @@ int main(int argc, char *argv[]) {
 
     printf("Agent running. Press Ctrl+C to exit.\n");
 
-    /* Main loop */
-    while (running) {
-        sleep(1);
-    }
+    /* Run deploy handler loop (blocks until shutdown) */
+    deploy_handler_loop();
 
     printf("\nShutting down...\n");
 

@@ -38,30 +38,40 @@ static void handle_rollback(const Satdeploy__DeployRequest *req,
 static void handle_deploy(const Satdeploy__DeployRequest *req,
                           Satdeploy__DeployResponse *resp);
 
+/* Server socket for deploy connections */
+static csp_socket_t deploy_socket = {0};
+
 /**
- * CSP callback for deploy port.
+ * Handle a single deploy connection.
  */
-static void deploy_callback(csp_packet_t *packet) {
-    if (packet == NULL || packet->length == 0) {
-        printf("[deploy] Empty packet received\n");
-        if (packet) csp_buffer_free(packet);
+static void handle_connection(csp_conn_t *conn) {
+    printf("[deploy] handle_connection called\n");
+    fflush(stdout);
+
+    csp_packet_t *packet = csp_read(conn, 10000);
+    if (packet == NULL) {
+        printf("[deploy] No data received on connection\n");
+        fflush(stdout);
         return;
     }
 
     printf("[deploy] Received %u bytes\n", packet->length);
+    fflush(stdout);
 
     /* Parse protobuf request */
     Satdeploy__DeployRequest *req = satdeploy__deploy_request__unpack(
         NULL, packet->length, packet->data);
 
+    csp_buffer_free(packet);
+
     if (req == NULL) {
         printf("[deploy] Failed to parse protobuf request\n");
-        csp_buffer_free(packet);
         return;
     }
 
     printf("[deploy] Command: %d, App: %s\n", req->command,
            req->app_name ? req->app_name : "(null)");
+    fflush(stdout);
 
     /* Prepare response */
     Satdeploy__DeployResponse resp = SATDEPLOY__DEPLOY_RESPONSE__INIT;
@@ -91,35 +101,55 @@ static void deploy_callback(csp_packet_t *packet) {
             break;
     }
 
-    /* Serialize response */
+    satdeploy__deploy_request__free_unpacked(req, NULL);
+
+    /* Serialize and send response */
     size_t resp_size = satdeploy__deploy_response__get_packed_size(&resp);
     csp_packet_t *resp_packet = csp_buffer_get(resp_size);
 
     if (resp_packet != NULL) {
         resp_packet->length = satdeploy__deploy_response__pack(&resp, resp_packet->data);
-
-        /* Send response back */
-        /* Note: For connectionless, we'd need the source address.
-           For now, we use the default route. */
         printf("[deploy] Sending response: %zu bytes, success=%d\n",
                resp_size, resp.success);
-
-        /* TODO: Send response via CSP */
-        csp_buffer_free(resp_packet);
+        fflush(stdout);
+        csp_send(conn, resp_packet);
+        printf("[deploy] Response sent\n");
+        fflush(stdout);
+    } else {
+        printf("[deploy] Failed to allocate response buffer\n");
+        fflush(stdout);
     }
-
-    /* Cleanup */
-    satdeploy__deploy_request__free_unpacked(req, NULL);
-    csp_buffer_free(packet);
 }
 
 int deploy_handler_init(void) {
     printf("[deploy] Initializing deploy handler on port %d\n", DEPLOY_PORT);
 
-    /* Bind callback to deploy port */
-    csp_bind_callback(deploy_callback, DEPLOY_PORT);
+    /* Bind socket to deploy port */
+    if (csp_bind(&deploy_socket, DEPLOY_PORT) != CSP_ERR_NONE) {
+        printf("[deploy] Failed to bind to port %d\n", DEPLOY_PORT);
+        return -1;
+    }
 
+    if (csp_listen(&deploy_socket, 10) != CSP_ERR_NONE) {
+        printf("[deploy] Failed to listen on socket\n");
+        return -1;
+    }
+
+    printf("[deploy] Listening on port %d\n", DEPLOY_PORT);
     return 0;
+}
+
+void deploy_handler_loop(void) {
+    while (running) {
+        csp_conn_t *conn = csp_accept(&deploy_socket, 1000);
+        if (conn == NULL) {
+            continue;
+        }
+
+        printf("[deploy] Accepted connection\n");
+        handle_connection(conn);
+        csp_close(conn);
+    }
 }
 
 /* --- Command Handlers --- */
@@ -145,7 +175,7 @@ static void handle_verify(const Satdeploy__DeployRequest *req,
            req->app_name ? req->app_name : "(null)",
            req->remote_path ? req->remote_path : "(null)");
 
-    if (req->remote_path == NULL) {
+    if (req->remote_path == NULL || strlen(req->remote_path) == 0) {
         resp->success = 0;
         resp->error_code = SATDEPLOY__DEPLOY_ERROR__ERR_APP_NOT_FOUND;
         resp->error_message = "No remote_path specified";

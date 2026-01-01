@@ -25,6 +25,9 @@
 /* Hash length (8 hex chars) */
 #define HASH_LEN 8
 
+/* Global running flag (set to 0 to trigger shutdown) */
+extern volatile int running;
+
 /**
  * Initialize the deploy handler.
  *
@@ -33,6 +36,14 @@
  * @return 0 on success, -1 on failure.
  */
 int deploy_handler_init(void);
+
+/**
+ * Run the deploy handler loop.
+ *
+ * This function blocks and handles incoming deploy connections.
+ * Should be called from a dedicated thread.
+ */
+void deploy_handler_loop(void);
 
 /**
  * Compute SHA256 checksum of a file.

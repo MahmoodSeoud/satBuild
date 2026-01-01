@@ -14,7 +14,7 @@ project(
 		'csp:conn_rxqueue_len=1000',
 		'csp:qfifo_len=1000',
 		'csp:rdp_max_window=1000',
-		'csp:port_max_bind=16',
+		'csp:port_max_bind=32',
 		'csp:use_rtable=true',
 		'param:have_fopen=true',
 		'param:list_dynamic=true',
