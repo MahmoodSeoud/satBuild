@@ -187,7 +187,7 @@ void   satdeploy__deploy_response__free_unpacked
   assert(message->base.descriptor == &satdeploy__deploy_response__descriptor);
   protobuf_c_message_free_unpacked ((ProtobufCMessage*)message, allocator);
 }
-static const ProtobufCFieldDescriptor satdeploy__deploy_request__field_descriptors[12] =
+static const ProtobufCFieldDescriptor satdeploy__deploy_request__field_descriptors[15] =
 {
   {
     "command",
@@ -333,10 +333,48 @@ static const ProtobufCFieldDescriptor satdeploy__deploy_request__field_descripto
     0,             /* flags */
     0,NULL,NULL    /* reserved1,reserved2, etc */
   },
+  {
+    "chunk_seq",
+    13,
+    PROTOBUF_C_LABEL_NONE,
+    PROTOBUF_C_TYPE_UINT32,
+    0,   /* quantifier_offset */
+    offsetof(Satdeploy__DeployRequest, chunk_seq),
+    NULL,
+    NULL,
+    0,             /* flags */
+    0,NULL,NULL    /* reserved1,reserved2, etc */
+  },
+  {
+    "total_chunks",
+    14,
+    PROTOBUF_C_LABEL_NONE,
+    PROTOBUF_C_TYPE_UINT32,
+    0,   /* quantifier_offset */
+    offsetof(Satdeploy__DeployRequest, total_chunks),
+    NULL,
+    NULL,
+    0,             /* flags */
+    0,NULL,NULL    /* reserved1,reserved2, etc */
+  },
+  {
+    "chunk_data",
+    15,
+    PROTOBUF_C_LABEL_NONE,
+    PROTOBUF_C_TYPE_BYTES,
+    0,   /* quantifier_offset */
+    offsetof(Satdeploy__DeployRequest, chunk_data),
+    NULL,
+    NULL,
+    0,             /* flags */
+    0,NULL,NULL    /* reserved1,reserved2, etc */
+  },
 };
 static const unsigned satdeploy__deploy_request__field_indices_by_name[] = {
   1,   /* field[1] = app_name */
   3,   /* field[3] = appsys_node */
+  14,   /* field[14] = chunk_data */
+  12,   /* field[12] = chunk_seq */
   0,   /* field[0] = command */
   6,   /* field[6] = dtp_server_node */
   7,   /* field[7] = dtp_server_port */
@@ -347,11 +385,12 @@ static const unsigned satdeploy__deploy_request__field_indices_by_name[] = {
   5,   /* field[5] = remote_path */
   11,   /* field[11] = rollback_hash */
   4,   /* field[4] = run_node */
+  13,   /* field[13] = total_chunks */
 };
 static const ProtobufCIntRange satdeploy__deploy_request__number_ranges[1 + 1] =
 {
   { 1, 0 },
-  { 0, 12 }
+  { 0, 15 }
 };
 const ProtobufCMessageDescriptor satdeploy__deploy_request__descriptor =
 {
@@ -361,7 +400,7 @@ const ProtobufCMessageDescriptor satdeploy__deploy_request__descriptor =
   "Satdeploy__DeployRequest",
   "satdeploy",
   sizeof(Satdeploy__DeployRequest),
-  12,
+  15,
   satdeploy__deploy_request__field_descriptors,
   satdeploy__deploy_request__field_indices_by_name,
   1,  satdeploy__deploy_request__number_ranges,
@@ -638,7 +677,7 @@ const ProtobufCMessageDescriptor satdeploy__deploy_response__descriptor =
   (ProtobufCMessageInit) satdeploy__deploy_response__init,
   NULL,NULL,NULL    /* reserved[123] */
 };
-static const ProtobufCEnumValue satdeploy__deploy_command__enum_values_by_number[6] =
+static const ProtobufCEnumValue satdeploy__deploy_command__enum_values_by_number[9] =
 {
   { "CMD_UNKNOWN", "SATDEPLOY__DEPLOY_COMMAND__CMD_UNKNOWN", 0 },
   { "CMD_STATUS", "SATDEPLOY__DEPLOY_COMMAND__CMD_STATUS", 1 },
@@ -646,17 +685,23 @@ static const ProtobufCEnumValue satdeploy__deploy_command__enum_values_by_number
   { "CMD_ROLLBACK", "SATDEPLOY__DEPLOY_COMMAND__CMD_ROLLBACK", 3 },
   { "CMD_LIST_VERSIONS", "SATDEPLOY__DEPLOY_COMMAND__CMD_LIST_VERSIONS", 4 },
   { "CMD_VERIFY", "SATDEPLOY__DEPLOY_COMMAND__CMD_VERIFY", 5 },
+  { "CMD_UPLOAD_START", "SATDEPLOY__DEPLOY_COMMAND__CMD_UPLOAD_START", 6 },
+  { "CMD_UPLOAD_CHUNK", "SATDEPLOY__DEPLOY_COMMAND__CMD_UPLOAD_CHUNK", 7 },
+  { "CMD_UPLOAD_END", "SATDEPLOY__DEPLOY_COMMAND__CMD_UPLOAD_END", 8 },
 };
 static const ProtobufCIntRange satdeploy__deploy_command__value_ranges[] = {
-{0, 0},{0, 6}
+{0, 0},{0, 9}
 };
-static const ProtobufCEnumValueIndex satdeploy__deploy_command__enum_values_by_name[6] =
+static const ProtobufCEnumValueIndex satdeploy__deploy_command__enum_values_by_name[9] =
 {
   { "CMD_DEPLOY", 2 },
   { "CMD_LIST_VERSIONS", 4 },
   { "CMD_ROLLBACK", 3 },
   { "CMD_STATUS", 1 },
   { "CMD_UNKNOWN", 0 },
+  { "CMD_UPLOAD_CHUNK", 7 },
+  { "CMD_UPLOAD_END", 8 },
+  { "CMD_UPLOAD_START", 6 },
   { "CMD_VERIFY", 5 },
 };
 const ProtobufCEnumDescriptor satdeploy__deploy_command__descriptor =
@@ -666,15 +711,15 @@ const ProtobufCEnumDescriptor satdeploy__deploy_command__descriptor =
   "DeployCommand",
   "Satdeploy__DeployCommand",
   "satdeploy",
-  6,
+  9,
   satdeploy__deploy_command__enum_values_by_number,
-  6,
+  9,
   satdeploy__deploy_command__enum_values_by_name,
   1,
   satdeploy__deploy_command__value_ranges,
   NULL,NULL,NULL,NULL   /* reserved[1234] */
 };
-static const ProtobufCEnumValue satdeploy__deploy_error__enum_values_by_number[11] =
+static const ProtobufCEnumValue satdeploy__deploy_error__enum_values_by_number[15] =
 {
   { "ERR_NONE", "SATDEPLOY__DEPLOY_ERROR__ERR_NONE", 0 },
   { "ERR_UNKNOWN_COMMAND", "SATDEPLOY__DEPLOY_ERROR__ERR_UNKNOWN_COMMAND", 1 },
@@ -687,23 +732,31 @@ static const ProtobufCEnumValue satdeploy__deploy_error__enum_values_by_number[1
   { "ERR_NO_BACKUPS", "SATDEPLOY__DEPLOY_ERROR__ERR_NO_BACKUPS", 8 },
   { "ERR_BACKUP_NOT_FOUND", "SATDEPLOY__DEPLOY_ERROR__ERR_BACKUP_NOT_FOUND", 9 },
   { "ERR_RESTORE_FAILED", "SATDEPLOY__DEPLOY_ERROR__ERR_RESTORE_FAILED", 10 },
+  { "ERR_UPLOAD_IN_PROGRESS", "SATDEPLOY__DEPLOY_ERROR__ERR_UPLOAD_IN_PROGRESS", 11 },
+  { "ERR_NO_UPLOAD_IN_PROGRESS", "SATDEPLOY__DEPLOY_ERROR__ERR_NO_UPLOAD_IN_PROGRESS", 12 },
+  { "ERR_CHUNK_OUT_OF_ORDER", "SATDEPLOY__DEPLOY_ERROR__ERR_CHUNK_OUT_OF_ORDER", 13 },
+  { "ERR_FILE_WRITE_FAILED", "SATDEPLOY__DEPLOY_ERROR__ERR_FILE_WRITE_FAILED", 14 },
 };
 static const ProtobufCIntRange satdeploy__deploy_error__value_ranges[] = {
-{0, 0},{0, 11}
+{0, 0},{0, 15}
 };
-static const ProtobufCEnumValueIndex satdeploy__deploy_error__enum_values_by_name[11] =
+static const ProtobufCEnumValueIndex satdeploy__deploy_error__enum_values_by_name[15] =
 {
   { "ERR_APP_NOT_FOUND", 2 },
   { "ERR_BACKUP_FAILED", 4 },
   { "ERR_BACKUP_NOT_FOUND", 9 },
   { "ERR_CHECKSUM_MISMATCH", 6 },
+  { "ERR_CHUNK_OUT_OF_ORDER", 13 },
   { "ERR_DTP_DOWNLOAD_FAILED", 5 },
+  { "ERR_FILE_WRITE_FAILED", 14 },
   { "ERR_INSTALL_FAILED", 7 },
   { "ERR_NONE", 0 },
   { "ERR_NO_BACKUPS", 8 },
+  { "ERR_NO_UPLOAD_IN_PROGRESS", 12 },
   { "ERR_PARAM_SET_FAILED", 3 },
   { "ERR_RESTORE_FAILED", 10 },
   { "ERR_UNKNOWN_COMMAND", 1 },
+  { "ERR_UPLOAD_IN_PROGRESS", 11 },
 };
 const ProtobufCEnumDescriptor satdeploy__deploy_error__descriptor =
 {
@@ -712,9 +765,9 @@ const ProtobufCEnumDescriptor satdeploy__deploy_error__descriptor =
   "DeployError",
   "Satdeploy__DeployError",
   "satdeploy",
-  11,
+  15,
   satdeploy__deploy_error__enum_values_by_number,
-  11,
+  15,
   satdeploy__deploy_error__enum_values_by_name,
   1,
   satdeploy__deploy_error__value_ranges,

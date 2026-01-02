@@ -61,16 +61,29 @@ int compute_file_checksum(const char *path, char *hash_out, size_t hash_size) {
 }
 
 /**
- * Ensure directory exists, creating if necessary.
+ * Recursively create directory path.
  */
 static int ensure_dir(const char *path) {
-    struct stat st;
-    if (stat(path, &st) == 0) {
-        return S_ISDIR(st.st_mode) ? 0 : -1;
+    char tmp[MAX_PATH_LEN];
+    char *p = NULL;
+    size_t len;
+
+    snprintf(tmp, sizeof(tmp), "%s", path);
+    len = strlen(tmp);
+    if (len > 0 && tmp[len - 1] == '/')
+        tmp[len - 1] = 0;
+
+    for (p = tmp + 1; *p; p++) {
+        if (*p == '/') {
+            *p = 0;
+            if (mkdir(tmp, 0755) != 0 && errno != EEXIST)
+                return -1;
+            *p = '/';
+        }
     }
-    if (mkdir(path, 0755) != 0 && errno != EEXIST) {
+    if (mkdir(tmp, 0755) != 0 && errno != EEXIST)
         return -1;
-    }
+
     return 0;
 }
 

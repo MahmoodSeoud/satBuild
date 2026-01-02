@@ -9,7 +9,10 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <errno.h>
+#include <dirent.h>
 #include <sys/stat.h>
+#include <libgen.h>
 
 #include <csp/csp.h>
 
@@ -18,6 +21,89 @@
 
 /* Maximum number of backups to return in list */
 #define MAX_BACKUP_ENTRIES 64
+
+/* Helper: recursively create directory path */
+static int mkdir_p(const char *path) {
+    char tmp[MAX_PATH_LEN];
+    char *p = NULL;
+    size_t len;
+
+    snprintf(tmp, sizeof(tmp), "%s", path);
+    len = strlen(tmp);
+    if (tmp[len - 1] == '/')
+        tmp[len - 1] = 0;
+
+    for (p = tmp + 1; *p; p++) {
+        if (*p == '/') {
+            *p = 0;
+            if (mkdir(tmp, 0755) != 0 && errno != EEXIST)
+                return -1;
+            *p = '/';
+        }
+    }
+    if (mkdir(tmp, 0755) != 0 && errno != EEXIST)
+        return -1;
+
+    return 0;
+}
+
+/* Helper: ensure parent directory exists */
+static int ensure_parent_dir(const char *path) {
+    char *path_copy = strdup(path);
+    if (!path_copy) return -1;
+
+    char *dir = dirname(path_copy);
+    int ret = mkdir_p(dir);
+
+    free(path_copy);
+    return ret;
+}
+
+/* Helper: copy file (for cross-filesystem moves) */
+static int copy_file_to(const char *src, const char *dst) {
+    FILE *fin = fopen(src, "rb");
+    if (!fin) return -1;
+
+    FILE *fout = fopen(dst, "wb");
+    if (!fout) {
+        fclose(fin);
+        return -1;
+    }
+
+    uint8_t buf[8192];
+    size_t n;
+    int result = 0;
+
+    while ((n = fread(buf, 1, sizeof(buf), fin)) > 0) {
+        if (fwrite(buf, 1, n, fout) != n) {
+            result = -1;
+            break;
+        }
+    }
+
+    fclose(fin);
+    fclose(fout);
+    return result;
+}
+
+/* Chunk size for file transfers (must fit in CSP packet with overhead) */
+#define CHUNK_SIZE 1400
+
+/* Upload session state */
+typedef struct {
+    int active;
+    char app_name[MAX_APP_NAME_LEN];
+    char remote_path[MAX_PATH_LEN];
+    char temp_path[MAX_PATH_LEN];
+    char expected_checksum[16];
+    uint32_t expected_size;
+    uint32_t received_size;
+    uint32_t next_chunk;
+    uint32_t total_chunks;
+    FILE *temp_file;
+} upload_session_t;
+
+static upload_session_t upload_session = {0};
 
 /* Structure to collect backups during iteration */
 typedef struct {
@@ -37,6 +123,12 @@ static void handle_rollback(const Satdeploy__DeployRequest *req,
                             Satdeploy__DeployResponse *resp);
 static void handle_deploy(const Satdeploy__DeployRequest *req,
                           Satdeploy__DeployResponse *resp);
+static void handle_upload_start(const Satdeploy__DeployRequest *req,
+                                Satdeploy__DeployResponse *resp);
+static void handle_upload_chunk(const Satdeploy__DeployRequest *req,
+                                Satdeploy__DeployResponse *resp);
+static void handle_upload_end(const Satdeploy__DeployRequest *req,
+                              Satdeploy__DeployResponse *resp);
 
 /* Server socket for deploy connections */
 static csp_socket_t deploy_socket = {0};
@@ -92,6 +184,15 @@ static void handle_connection(csp_conn_t *conn) {
             break;
         case SATDEPLOY__DEPLOY_COMMAND__CMD_DEPLOY:
             handle_deploy(req, &resp);
+            break;
+        case SATDEPLOY__DEPLOY_COMMAND__CMD_UPLOAD_START:
+            handle_upload_start(req, &resp);
+            break;
+        case SATDEPLOY__DEPLOY_COMMAND__CMD_UPLOAD_CHUNK:
+            handle_upload_chunk(req, &resp);
+            break;
+        case SATDEPLOY__DEPLOY_COMMAND__CMD_UPLOAD_END:
+            handle_upload_end(req, &resp);
             break;
         default:
             printf("[deploy] Unknown command: %d\n", req->command);
@@ -159,14 +260,40 @@ static void handle_status(const Satdeploy__DeployRequest *req,
     (void)req;
     printf("[deploy] STATUS command\n");
 
-    /* For now, return success with no apps.
-       Full implementation would query libparam for running apps
-       and check binary checksums. */
-    resp->success = 1;
-    resp->n_apps = 0;
-    resp->apps = NULL;
+    /* Scan backup directory for deployed apps */
+    static Satdeploy__AppStatusEntry *app_entries[32];
+    static Satdeploy__AppStatusEntry app_storage[32];
+    int app_count = 0;
 
-    printf("[deploy] Status: agent running, no apps registered\n");
+    DIR *dir = opendir(BACKUP_DIR);
+    if (dir) {
+        struct dirent *entry;
+        while ((entry = readdir(dir)) != NULL && app_count < 32) {
+            if (entry->d_name[0] == '.') continue;
+
+            /* Check if it's a directory (an app) */
+            char path[MAX_PATH_LEN];
+            snprintf(path, sizeof(path), "%s/%s", BACKUP_DIR, entry->d_name);
+            struct stat st;
+            if (stat(path, &st) == 0 && S_ISDIR(st.st_mode)) {
+                Satdeploy__AppStatusEntry *app = &app_storage[app_count];
+                satdeploy__app_status_entry__init(app);
+                app->app_name = strdup(entry->d_name);
+                app->running = 0;  /* Would need process check */
+                app->binary_hash = "";
+                app->remote_path = "";
+                app_entries[app_count] = app;
+                app_count++;
+            }
+        }
+        closedir(dir);
+    }
+
+    resp->success = 1;
+    resp->n_apps = app_count;
+    resp->apps = app_entries;
+
+    printf("[deploy] Status: agent running, %d apps with backups\n", app_count);
 }
 
 static void handle_verify(const Satdeploy__DeployRequest *req,
@@ -504,4 +631,230 @@ static void handle_deploy(const Satdeploy__DeployRequest *req,
         resp->backup_path = backup_path_buf;
     }
     printf("[deploy] Deploy complete!\n");
+}
+
+/* --- Direct Upload Handlers --- */
+
+static void upload_session_reset(void) {
+    if (upload_session.temp_file) {
+        fclose(upload_session.temp_file);
+        upload_session.temp_file = NULL;
+    }
+    if (upload_session.temp_path[0]) {
+        unlink(upload_session.temp_path);
+    }
+    memset(&upload_session, 0, sizeof(upload_session));
+}
+
+static void handle_upload_start(const Satdeploy__DeployRequest *req,
+                                Satdeploy__DeployResponse *resp) {
+    printf("[deploy] UPLOAD_START for %s\n",
+           req->app_name ? req->app_name : "(null)");
+    printf("  remote_path: %s\n", req->remote_path ? req->remote_path : "(null)");
+    printf("  expected: size=%u checksum=%s chunks=%u\n",
+           req->expected_size,
+           req->expected_checksum ? req->expected_checksum : "(null)",
+           req->total_chunks);
+
+    /* Abort any existing upload */
+    if (upload_session.active) {
+        printf("[deploy] Aborting previous upload session\n");
+        upload_session_reset();
+    }
+
+    /* Validate required fields */
+    if (!req->app_name || strlen(req->app_name) == 0) {
+        resp->success = 0;
+        resp->error_code = SATDEPLOY__DEPLOY_ERROR__ERR_APP_NOT_FOUND;
+        resp->error_message = "No app_name specified";
+        return;
+    }
+
+    if (!req->remote_path || strlen(req->remote_path) == 0) {
+        resp->success = 0;
+        resp->error_code = SATDEPLOY__DEPLOY_ERROR__ERR_APP_NOT_FOUND;
+        resp->error_message = "No remote_path specified";
+        return;
+    }
+
+    /* Initialize upload session */
+    upload_session.active = 1;
+    strncpy(upload_session.app_name, req->app_name, MAX_APP_NAME_LEN - 1);
+    strncpy(upload_session.remote_path, req->remote_path, MAX_PATH_LEN - 1);
+    snprintf(upload_session.temp_path, MAX_PATH_LEN, "/tmp/satdeploy-%s.tmp", req->app_name);
+
+    if (req->expected_checksum) {
+        strncpy(upload_session.expected_checksum, req->expected_checksum,
+                sizeof(upload_session.expected_checksum) - 1);
+    }
+    upload_session.expected_size = req->expected_size;
+    upload_session.total_chunks = req->total_chunks;
+    upload_session.received_size = 0;
+    upload_session.next_chunk = 0;
+
+    /* Open temp file for writing */
+    upload_session.temp_file = fopen(upload_session.temp_path, "wb");
+    if (!upload_session.temp_file) {
+        printf("[deploy] Failed to open temp file: %s\n", upload_session.temp_path);
+        upload_session_reset();
+        resp->success = 0;
+        resp->error_code = SATDEPLOY__DEPLOY_ERROR__ERR_FILE_WRITE_FAILED;
+        resp->error_message = "Failed to create temp file";
+        return;
+    }
+
+    printf("[deploy] Upload session started, expecting %u chunks\n", req->total_chunks);
+    resp->success = 1;
+}
+
+static void handle_upload_chunk(const Satdeploy__DeployRequest *req,
+                                Satdeploy__DeployResponse *resp) {
+    printf("[deploy] UPLOAD_CHUNK seq=%u/%u, %zu bytes\n",
+           req->chunk_seq, upload_session.total_chunks,
+           req->chunk_data.len);
+
+    if (!upload_session.active) {
+        resp->success = 0;
+        resp->error_code = SATDEPLOY__DEPLOY_ERROR__ERR_NO_UPLOAD_IN_PROGRESS;
+        resp->error_message = "No upload in progress";
+        return;
+    }
+
+    if (req->chunk_seq != upload_session.next_chunk) {
+        printf("[deploy] Chunk out of order: expected %u, got %u\n",
+               upload_session.next_chunk, req->chunk_seq);
+        resp->success = 0;
+        resp->error_code = SATDEPLOY__DEPLOY_ERROR__ERR_CHUNK_OUT_OF_ORDER;
+        resp->error_message = "Chunk out of order";
+        return;
+    }
+
+    if (req->chunk_data.len == 0 || req->chunk_data.data == NULL) {
+        resp->success = 0;
+        resp->error_code = SATDEPLOY__DEPLOY_ERROR__ERR_FILE_WRITE_FAILED;
+        resp->error_message = "Empty chunk data";
+        return;
+    }
+
+    /* Write chunk to temp file */
+    size_t written = fwrite(req->chunk_data.data, 1, req->chunk_data.len,
+                            upload_session.temp_file);
+    if (written != req->chunk_data.len) {
+        printf("[deploy] Write failed: %zu of %zu bytes\n", written, req->chunk_data.len);
+        upload_session_reset();
+        resp->success = 0;
+        resp->error_code = SATDEPLOY__DEPLOY_ERROR__ERR_FILE_WRITE_FAILED;
+        resp->error_message = "Failed to write chunk";
+        return;
+    }
+
+    upload_session.received_size += req->chunk_data.len;
+    upload_session.next_chunk++;
+
+    resp->success = 1;
+}
+
+static void handle_upload_end(const Satdeploy__DeployRequest *req,
+                              Satdeploy__DeployResponse *resp) {
+    (void)req;
+    printf("[deploy] UPLOAD_END - received %u bytes\n", upload_session.received_size);
+
+    if (!upload_session.active) {
+        resp->success = 0;
+        resp->error_code = SATDEPLOY__DEPLOY_ERROR__ERR_NO_UPLOAD_IN_PROGRESS;
+        resp->error_message = "No upload in progress";
+        return;
+    }
+
+    /* Close temp file */
+    fclose(upload_session.temp_file);
+    upload_session.temp_file = NULL;
+
+    /* Verify size */
+    if (upload_session.expected_size > 0 &&
+        upload_session.received_size != upload_session.expected_size) {
+        printf("[deploy] Size mismatch: expected %u, got %u\n",
+               upload_session.expected_size, upload_session.received_size);
+        upload_session_reset();
+        resp->success = 0;
+        resp->error_code = SATDEPLOY__DEPLOY_ERROR__ERR_CHECKSUM_MISMATCH;
+        resp->error_message = "Size mismatch";
+        return;
+    }
+
+    /* Verify checksum */
+    if (upload_session.expected_checksum[0]) {
+        static char actual_checksum[16];
+        if (compute_file_checksum(upload_session.temp_path, actual_checksum,
+                                  sizeof(actual_checksum)) != 0) {
+            upload_session_reset();
+            resp->success = 0;
+            resp->error_code = SATDEPLOY__DEPLOY_ERROR__ERR_CHECKSUM_MISMATCH;
+            resp->error_message = "Failed to compute checksum";
+            return;
+        }
+
+        if (strcmp(actual_checksum, upload_session.expected_checksum) != 0) {
+            printf("[deploy] Checksum mismatch: expected=%s, actual=%s\n",
+                   upload_session.expected_checksum, actual_checksum);
+            upload_session_reset();
+            resp->success = 0;
+            resp->error_code = SATDEPLOY__DEPLOY_ERROR__ERR_CHECKSUM_MISMATCH;
+            resp->error_message = "Checksum mismatch";
+            return;
+        }
+        printf("[deploy] Checksum verified: %s\n", actual_checksum);
+    }
+
+    /* Backup existing binary if present */
+    static char backup_path_buf[MAX_PATH_LEN];
+    backup_path_buf[0] = '\0';
+
+    if (access(upload_session.remote_path, F_OK) == 0) {
+        printf("[deploy] Creating backup of %s\n", upload_session.remote_path);
+        if (backup_create(upload_session.app_name, upload_session.remote_path,
+                          backup_path_buf, sizeof(backup_path_buf)) != 0) {
+            upload_session_reset();
+            resp->success = 0;
+            resp->error_code = SATDEPLOY__DEPLOY_ERROR__ERR_BACKUP_FAILED;
+            resp->error_message = "Failed to backup current binary";
+            return;
+        }
+        printf("[deploy] Backup created: %s\n", backup_path_buf);
+    }
+
+    /* Ensure parent directory exists */
+    if (ensure_parent_dir(upload_session.remote_path) != 0) {
+        printf("[deploy] Failed to create parent directory\n");
+        upload_session_reset();
+        resp->success = 0;
+        resp->error_code = SATDEPLOY__DEPLOY_ERROR__ERR_INSTALL_FAILED;
+        resp->error_message = "Failed to create directory";
+        return;
+    }
+
+    /* Install binary (copy temp to final location, handles cross-filesystem) */
+    printf("[deploy] Installing binary to %s\n", upload_session.remote_path);
+    if (copy_file_to(upload_session.temp_path, upload_session.remote_path) != 0) {
+        upload_session_reset();
+        resp->success = 0;
+        resp->error_code = SATDEPLOY__DEPLOY_ERROR__ERR_INSTALL_FAILED;
+        resp->error_message = "Failed to install binary";
+        return;
+    }
+    unlink(upload_session.temp_path);  /* Clean up temp file */
+
+    /* Make executable */
+    chmod(upload_session.remote_path, 0755);
+
+    /* Clear session (but don't delete files) */
+    upload_session.active = 0;
+    upload_session.temp_path[0] = '\0';
+
+    /* Success */
+    resp->success = 1;
+    if (backup_path_buf[0]) {
+        resp->backup_path = backup_path_buf;
+    }
+    printf("[deploy] Direct upload deploy complete!\n");
 }

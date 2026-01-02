@@ -19,14 +19,17 @@ csp_dep = dependency('csp', fallback: ['csp', 'csp_dep'], required: true)
 slash_dep = dependency('slash', fallback: ['slash', 'slash_dep'], required: false).partial_dependency(links: false, includes: true)
 param_dep = dependency('param', fallback: ['param', 'param_dep']).as_link_whole()
 proto_c_dep = dependency('libprotobuf-c', fallback: ['protobuf-c', 'proto_c_dep'])
+yaml_dep = dependency('yaml-0.1', required: true)
+openssl_dep = dependency('openssl', required: true)
 
 satdeploy_apm = shared_library(
     'csh_satdeploy_apm',
     [
       'src/satdeploy_apm.c',
       'src/deploy.pb-c.c',
+      'src/config.c',
     ],
     include_directories: includes,
-    dependencies: [apm_csh_dep, slash_dep, param_dep, csp_dep, proto_c_dep],
+    dependencies: [apm_csh_dep, slash_dep, param_dep, csp_dep, proto_c_dep, yaml_dep, openssl_dep],
     install: true
 )

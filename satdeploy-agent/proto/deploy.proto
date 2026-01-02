@@ -9,11 +9,14 @@ package satdeploy;
 // Command types for the deploy protocol
 enum DeployCommand {
     CMD_UNKNOWN = 0;
-    CMD_STATUS = 1;      // Query agent status, list deployed apps
-    CMD_DEPLOY = 2;      // Stop app, backup, download binary, install, start app
-    CMD_ROLLBACK = 3;    // Restore previous version
+    CMD_STATUS = 1;        // Query agent status, list deployed apps
+    CMD_DEPLOY = 2;        // (Legacy) Deploy via DTP download
+    CMD_ROLLBACK = 3;      // Restore previous version
     CMD_LIST_VERSIONS = 4; // List available backups for an app
-    CMD_VERIFY = 5;      // Check installed binary checksum
+    CMD_VERIFY = 5;        // Check installed binary checksum
+    CMD_UPLOAD_START = 6;  // Start direct file upload (sends metadata)
+    CMD_UPLOAD_CHUNK = 7;  // File data chunk
+    CMD_UPLOAD_END = 8;    // End upload and trigger install
 }
 
 // Request message sent from ground to satellite
@@ -40,6 +43,11 @@ message DeployRequest {
 
     // For rollback command
     string rollback_hash = 12;  // Specific backup hash to restore (optional)
+
+    // For direct upload (CMD_UPLOAD_START, CMD_UPLOAD_CHUNK, CMD_UPLOAD_END)
+    uint32 chunk_seq = 13;      // Chunk sequence number (0-based)
+    uint32 total_chunks = 14;   // Total number of chunks
+    bytes chunk_data = 15;      // File data chunk (max ~1500 bytes per chunk)
 }
 
 // Backup information returned by CMD_LIST_VERSIONS
@@ -90,4 +98,8 @@ enum DeployError {
     ERR_NO_BACKUPS = 8;
     ERR_BACKUP_NOT_FOUND = 9;
     ERR_RESTORE_FAILED = 10;
+    ERR_UPLOAD_IN_PROGRESS = 11;
+    ERR_NO_UPLOAD_IN_PROGRESS = 12;
+    ERR_CHUNK_OUT_OF_ORDER = 13;
+    ERR_FILE_WRITE_FAILED = 14;
 }

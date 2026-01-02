@@ -33,7 +33,7 @@ typedef enum _Satdeploy__DeployCommand {
    */
   SATDEPLOY__DEPLOY_COMMAND__CMD_STATUS = 1,
   /*
-   * Stop app, backup, download binary, install, start app
+   * (Legacy) Deploy via DTP download
    */
   SATDEPLOY__DEPLOY_COMMAND__CMD_DEPLOY = 2,
   /*
@@ -47,7 +47,19 @@ typedef enum _Satdeploy__DeployCommand {
   /*
    * Check installed binary checksum
    */
-  SATDEPLOY__DEPLOY_COMMAND__CMD_VERIFY = 5
+  SATDEPLOY__DEPLOY_COMMAND__CMD_VERIFY = 5,
+  /*
+   * Start direct file upload (sends metadata)
+   */
+  SATDEPLOY__DEPLOY_COMMAND__CMD_UPLOAD_START = 6,
+  /*
+   * File data chunk
+   */
+  SATDEPLOY__DEPLOY_COMMAND__CMD_UPLOAD_CHUNK = 7,
+  /*
+   * End upload and trigger install
+   */
+  SATDEPLOY__DEPLOY_COMMAND__CMD_UPLOAD_END = 8
     PROTOBUF_C__FORCE_ENUM_TO_BE_INT_SIZE(SATDEPLOY__DEPLOY_COMMAND)
 } Satdeploy__DeployCommand;
 /*
@@ -64,7 +76,11 @@ typedef enum _Satdeploy__DeployError {
   SATDEPLOY__DEPLOY_ERROR__ERR_INSTALL_FAILED = 7,
   SATDEPLOY__DEPLOY_ERROR__ERR_NO_BACKUPS = 8,
   SATDEPLOY__DEPLOY_ERROR__ERR_BACKUP_NOT_FOUND = 9,
-  SATDEPLOY__DEPLOY_ERROR__ERR_RESTORE_FAILED = 10
+  SATDEPLOY__DEPLOY_ERROR__ERR_RESTORE_FAILED = 10,
+  SATDEPLOY__DEPLOY_ERROR__ERR_UPLOAD_IN_PROGRESS = 11,
+  SATDEPLOY__DEPLOY_ERROR__ERR_NO_UPLOAD_IN_PROGRESS = 12,
+  SATDEPLOY__DEPLOY_ERROR__ERR_CHUNK_OUT_OF_ORDER = 13,
+  SATDEPLOY__DEPLOY_ERROR__ERR_FILE_WRITE_FAILED = 14
     PROTOBUF_C__FORCE_ENUM_TO_BE_INT_SIZE(SATDEPLOY__DEPLOY_ERROR)
 } Satdeploy__DeployError;
 
@@ -133,10 +149,25 @@ struct  Satdeploy__DeployRequest
    * Specific backup hash to restore (optional)
    */
   char *rollback_hash;
+  /*
+   * For direct upload (CMD_UPLOAD_START, CMD_UPLOAD_CHUNK, CMD_UPLOAD_END)
+   */
+  /*
+   * Chunk sequence number (0-based)
+   */
+  uint32_t chunk_seq;
+  /*
+   * Total number of chunks
+   */
+  uint32_t total_chunks;
+  /*
+   * File data chunk (max ~1500 bytes per chunk)
+   */
+  ProtobufCBinaryData chunk_data;
 };
 #define SATDEPLOY__DEPLOY_REQUEST__INIT \
  { PROTOBUF_C_MESSAGE_INIT (&satdeploy__deploy_request__descriptor) \
-    , SATDEPLOY__DEPLOY_COMMAND__CMD_UNKNOWN, (char *)protobuf_c_empty_string, (char *)protobuf_c_empty_string, 0, 0, (char *)protobuf_c_empty_string, 0, 0, 0, 0, (char *)protobuf_c_empty_string, (char *)protobuf_c_empty_string }
+    , SATDEPLOY__DEPLOY_COMMAND__CMD_UNKNOWN, (char *)protobuf_c_empty_string, (char *)protobuf_c_empty_string, 0, 0, (char *)protobuf_c_empty_string, 0, 0, 0, 0, (char *)protobuf_c_empty_string, (char *)protobuf_c_empty_string, 0, 0, {0,NULL} }
 
 
 /*
