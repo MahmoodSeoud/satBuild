@@ -26,6 +26,7 @@ sources = files(
 	'src/main.c',
 	'src/deploy_handler.c',
 	'src/backup_manager.c',
+	'src/app_metadata.c',
 	'src/dtp_client.c',
 	'proto/deploy.pb-c.c',
 )

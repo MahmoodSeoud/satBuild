@@ -4,27 +4,55 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-sat-deploy is a CLI tool for deploying binaries to embedded Linux targets via SSH. It provides versioned backups, dependency-aware service restarts, and one-command rollback.
+sat-deploy is a deployment system for embedded Linux targets (satellites) via CSP/csh. It consists of:
 
-## Build & Development Commands
+- **satdeploy** (Python CLI) - Ground station tool for SSH-based deployment
+- **satdeploy-agent** (C) - Runs on ARM target, handles deploy/rollback/status via CSP
+- **satdeploy-apm** (C) - csh slash commands for ground station, talks to agent via CSP
+
+## CRITICAL: Cross-Compilation
+
+The **satdeploy-agent** runs on ARM targets (aarch64/cortex-a53). You MUST cross-compile:
 
 ```bash
-# Install in development mode
+# 1. Source Yocto SDK environment
+source /opt/poky/environment-setup-armv8a-poky-linux
+
+# 2. Build for ARM target
+cd satdeploy-agent
+meson setup build-arm --cross-file yocto_cross.ini
+ninja -C build-arm
+
+# The ARM binary is: build-arm/satdeploy-agent
+```
+
+**DO NOT** use the `build/` directory for deployment - that's x86 native builds for local testing only.
+
+## Build Commands
+
+### satdeploy-agent (ARM target)
+```bash
+source /opt/poky/environment-setup-armv8a-poky-linux
+cd satdeploy-agent
+meson setup build-arm --cross-file yocto_cross.ini --wipe  # --wipe to reconfigure
+ninja -C build-arm
+# Deploy: build-arm/satdeploy-agent
+```
+
+### satdeploy-apm (Ground station csh module)
+```bash
+cd satdeploy-apm
+meson setup build --wipe
+ninja -C build
+# Install: cp build/libcsh_satdeploy_apm.so /root/.local/lib/csh/
+```
+
+### Python CLI (development)
+```bash
 python -m venv .venv
 source .venv/bin/activate
 pip install -e ".[dev]"
-
-# Run all tests
 python -m pytest
-
-# Run a single test file
-python -m pytest tests/test_cli_push.py
-
-# Run a specific test
-python -m pytest tests/test_cli_push.py::TestPushCommand::test_push_requires_app_name
-
-# Run tests with output
-python -m pytest -v
 ```
 
 ## CLI Usage

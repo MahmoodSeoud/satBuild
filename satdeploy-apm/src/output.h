@@ -21,11 +21,11 @@
 #define COLOR_BRIGHT_BLACK "\033[90m"
 #define COLOR_BOLD        "\033[1m"
 
-/* Unicode symbols (same as Python CLI) */
-#define SYM_CHECK   "\xe2\x96\xb8"  /* ▸ */
-#define SYM_CROSS   "\xe2\x9c\x97"  /* ✗ */
-#define SYM_ARROW   "\xe2\x86\x92"  /* → */
-#define SYM_BULLET  "\xe2\x80\xa2"  /* • */
+/* ASCII symbols (fallback for terminals without UTF-8) */
+#define SYM_CHECK   ">"   /* Running/success */
+#define SYM_CROSS   "x"   /* Failed */
+#define SYM_ARROW   ">"   /* Deployed/current */
+#define SYM_BULLET  "*"   /* Backup/stopped */
 
 /* Column widths for tabular output */
 #define COL_APP_WIDTH      16
