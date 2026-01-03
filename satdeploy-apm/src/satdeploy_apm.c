@@ -655,23 +655,10 @@ static int satdeploy_verify_cmd(struct slash *slash)
 
 static int satdeploy_config_cmd(struct slash *slash)
 {
-    int reload = 0;
+    (void)slash;
 
-    optparse_t *parser = optparse_new("satdeploy config", "[--reload]");
-    optparse_add_help(parser);
-    optparse_add_set(parser, 'r', "reload", 1, &reload, "Force reload config from disk");
-
-    int argi = optparse_parse(parser, slash->argc - 1, (const char **)slash->argv + 1);
-    if (argi < 0) {
-        optparse_del(parser);
-        return SLASH_EINVAL;
-    }
-    optparse_del(parser);
-
-    if (reload) {
-        satdeploy_config_reset();
-        printf("Config cache cleared\n");
-    }
+    /* Always reload config from disk to show current state */
+    satdeploy_config_reset();
 
     char config_path[256];
     if (satdeploy_config_path(config_path, sizeof(config_path)) < 0) {
@@ -733,7 +720,7 @@ static int satdeploy_help_cmd(struct slash *slash)
 
 slash_command_group(satdeploy, "Satellite binary deployment");
 slash_command_sub(satdeploy, help, satdeploy_help_cmd, NULL, "Show this help message");
-slash_command_sub(satdeploy, config, satdeploy_config_cmd, "[-r]", "Show current configuration (use -r to reload)");
+slash_command_sub(satdeploy, config, satdeploy_config_cmd, "", "Show current configuration");
 slash_command_sub(satdeploy, status, satdeploy_status_cmd, NULL, "Query agent status and list deployed apps");
 slash_command_sub(satdeploy, deploy, satdeploy_deploy_cmd, "<app> [options]", "Deploy a binary to the target");
 slash_command_sub(satdeploy, rollback, satdeploy_rollback_cmd, "<app> [-H hash]", "Rollback to previous version");
