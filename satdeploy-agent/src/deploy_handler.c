@@ -22,68 +22,16 @@
 /* Maximum number of backups to return in list */
 #define MAX_BACKUP_ENTRIES 64
 
-/* Helper: recursively create directory path */
-static int mkdir_p(const char *path) {
-    char tmp[MAX_PATH_LEN];
-    char *p = NULL;
-    size_t len;
-
-    snprintf(tmp, sizeof(tmp), "%s", path);
-    len = strlen(tmp);
-    if (tmp[len - 1] == '/')
-        tmp[len - 1] = 0;
-
-    for (p = tmp + 1; *p; p++) {
-        if (*p == '/') {
-            *p = 0;
-            if (mkdir(tmp, 0755) != 0 && errno != EEXIST)
-                return -1;
-            *p = '/';
-        }
-    }
-    if (mkdir(tmp, 0755) != 0 && errno != EEXIST)
-        return -1;
-
-    return 0;
-}
-
 /* Helper: ensure parent directory exists */
 static int ensure_parent_dir(const char *path) {
     char *path_copy = strdup(path);
     if (!path_copy) return -1;
 
     char *dir = dirname(path_copy);
-    int ret = mkdir_p(dir);
+    int ret = mkdir_p(dir);  /* Uses shared mkdir_p from backup_manager.c */
 
     free(path_copy);
     return ret;
-}
-
-/* Helper: copy file (for cross-filesystem moves) */
-static int copy_file_to(const char *src, const char *dst) {
-    FILE *fin = fopen(src, "rb");
-    if (!fin) return -1;
-
-    FILE *fout = fopen(dst, "wb");
-    if (!fout) {
-        fclose(fin);
-        return -1;
-    }
-
-    uint8_t buf[8192];
-    size_t n;
-    int result = 0;
-
-    while ((n = fread(buf, 1, sizeof(buf), fin)) > 0) {
-        if (fwrite(buf, 1, n, fout) != n) {
-            result = -1;
-            break;
-        }
-    }
-
-    fclose(fin);
-    fclose(fout);
-    return result;
 }
 
 /* Chunk size for file transfers (must fit in CSP packet with overhead) */
@@ -255,45 +203,66 @@ void deploy_handler_loop(void) {
 
 /* --- Command Handlers --- */
 
+/* Callback context for status command */
+typedef struct {
+    Satdeploy__AppStatusEntry **entries;
+    Satdeploy__AppStatusEntry *storage;
+    int count;
+    int max;
+} status_context_t;
+
+/* Callback for app_metadata_list */
+static void status_metadata_callback(const char *app_name, const char *remote_path,
+                                     const char *binary_hash, const char *deployed_at,
+                                     void *user_data) {
+    (void)deployed_at;
+    (void)binary_hash;
+    status_context_t *ctx = (status_context_t *)user_data;
+
+    if (ctx->count >= ctx->max) return;
+
+    /* Verify file actually exists - skip if missing */
+    static char hash_buf[32][16];
+    if (compute_file_checksum(remote_path, hash_buf[ctx->count], 16) != 0) {
+        /* File missing or unreadable - don't include in status */
+        printf("[deploy] Skipping %s: file missing at %s\n", app_name, remote_path);
+        return;
+    }
+
+    Satdeploy__AppStatusEntry *app = &ctx->storage[ctx->count];
+    satdeploy__app_status_entry__init(app);
+    app->app_name = strdup(app_name);
+    app->remote_path = strdup(remote_path);
+    app->binary_hash = hash_buf[ctx->count];
+    app->running = 0;  /* TODO: Check if process is running */
+
+    ctx->entries[ctx->count] = app;
+    ctx->count++;
+}
+
 static void handle_status(const Satdeploy__DeployRequest *req,
                           Satdeploy__DeployResponse *resp) {
     (void)req;
     printf("[deploy] STATUS command\n");
 
-    /* Scan backup directory for deployed apps */
     static Satdeploy__AppStatusEntry *app_entries[32];
     static Satdeploy__AppStatusEntry app_storage[32];
-    int app_count = 0;
 
-    DIR *dir = opendir(BACKUP_DIR);
-    if (dir) {
-        struct dirent *entry;
-        while ((entry = readdir(dir)) != NULL && app_count < 32) {
-            if (entry->d_name[0] == '.') continue;
+    status_context_t ctx = {
+        .entries = app_entries,
+        .storage = app_storage,
+        .count = 0,
+        .max = 32
+    };
 
-            /* Check if it's a directory (an app) */
-            char path[MAX_PATH_LEN];
-            snprintf(path, sizeof(path), "%s/%s", BACKUP_DIR, entry->d_name);
-            struct stat st;
-            if (stat(path, &st) == 0 && S_ISDIR(st.st_mode)) {
-                Satdeploy__AppStatusEntry *app = &app_storage[app_count];
-                satdeploy__app_status_entry__init(app);
-                app->app_name = strdup(entry->d_name);
-                app->running = 0;  /* Would need process check */
-                app->binary_hash = "";
-                app->remote_path = "";
-                app_entries[app_count] = app;
-                app_count++;
-            }
-        }
-        closedir(dir);
-    }
+    /* Get deployed apps from metadata */
+    app_metadata_list(status_metadata_callback, &ctx);
 
     resp->success = 1;
-    resp->n_apps = app_count;
+    resp->n_apps = ctx.count;
     resp->apps = app_entries;
 
-    printf("[deploy] Status: agent running, %d apps with backups\n", app_count);
+    printf("[deploy] Status: agent running, %d deployed apps\n", ctx.count);
 }
 
 static void handle_verify(const Satdeploy__DeployRequest *req,
@@ -322,14 +291,22 @@ static void handle_verify(const Satdeploy__DeployRequest *req,
 
 /**
  * Callback for backup_list - collects entries into the collection.
+ * Deduplicates by hash (old and new format files may have same hash).
  */
 static void backup_collect_callback(const char *version, const char *timestamp,
                                     const char *hash, const char *path,
                                     void *user_data) {
     backup_collection_t *col = (backup_collection_t *)user_data;
 
-    if (col->count >= col->capacity) {
-        return;  /* At capacity */
+    if (col->count >= col->capacity || !hash) {
+        return;
+    }
+
+    /* Deduplicate: skip if this hash already exists */
+    for (size_t i = 0; i < col->count; i++) {
+        if (col->entries[i]->hash && strcmp(col->entries[i]->hash, hash) == 0) {
+            return;  /* Already have this hash */
+        }
     }
 
     /* Allocate and initialize entry */
@@ -375,7 +352,7 @@ static void handle_list_versions(const Satdeploy__DeployRequest *req,
         return;
     }
 
-    /* Allocate collection for backups */
+    /* Allocate collection for backups (+ 1 for current deployed) */
     backup_collection_t col = {
         .entries = malloc(sizeof(Satdeploy__BackupEntry *) * MAX_BACKUP_ENTRIES),
         .count = 0,
@@ -389,8 +366,49 @@ static void handle_list_versions(const Satdeploy__DeployRequest *req,
         return;
     }
 
-    /* List backups */
+    /* First, list backups */
     int result = backup_list(req->app_name, backup_collect_callback, &col);
+
+    /* Get currently deployed version */
+    char remote_path[MAX_PATH_LEN], binary_hash[16], deployed_at[32];
+    char actual_hash[16] = {0};
+    int have_current = 0;
+
+    if (app_metadata_get(req->app_name, remote_path, sizeof(remote_path),
+                         binary_hash, sizeof(binary_hash),
+                         deployed_at, sizeof(deployed_at)) == 0) {
+        /* Verify file actually exists */
+        if (compute_file_checksum(remote_path, actual_hash, sizeof(actual_hash)) == 0) {
+            have_current = 1;
+        }
+    }
+
+    /* Check if current hash already exists in backups */
+    int current_in_backups = 0;
+    if (have_current) {
+        for (size_t i = 0; i < col.count; i++) {
+            if (col.entries[i]->hash && strcmp(col.entries[i]->hash, actual_hash) == 0) {
+                /* Mark this backup as "current" */
+                free(col.entries[i]->version);
+                col.entries[i]->version = strdup("current");
+                current_in_backups = 1;
+                break;
+            }
+        }
+
+        /* Only add separate "current" entry if not in backups */
+        if (!current_in_backups) {
+            Satdeploy__BackupEntry *current = malloc(sizeof(Satdeploy__BackupEntry));
+            if (current) {
+                satdeploy__backup_entry__init(current);
+                current->version = strdup("current");
+                current->timestamp = strdup(deployed_at);
+                current->hash = strdup(actual_hash);
+                current->path = strdup(remote_path);
+                col.entries[col.count++] = current;
+            }
+        }
+    }
 
     if (result < 0) {
         free_backup_entries(col.entries, col.count);
@@ -400,7 +418,25 @@ static void handle_list_versions(const Satdeploy__DeployRequest *req,
         return;
     }
 
-    printf("[deploy] Found %zu backups for %s\n", col.count, req->app_name);
+    /* Sort entries by mtime descending (newest first) - matches dial order */
+    for (size_t i = 0; i < col.count; i++) {
+        for (size_t j = i + 1; j < col.count; j++) {
+            struct stat st_i, st_j;
+            time_t mtime_i = 0, mtime_j = 0;
+            if (col.entries[i]->path && stat(col.entries[i]->path, &st_i) == 0)
+                mtime_i = st_i.st_mtime;
+            if (col.entries[j]->path && stat(col.entries[j]->path, &st_j) == 0)
+                mtime_j = st_j.st_mtime;
+            if (mtime_j > mtime_i) {
+                /* Swap - newer should come first */
+                Satdeploy__BackupEntry *tmp = col.entries[i];
+                col.entries[i] = col.entries[j];
+                col.entries[j] = tmp;
+            }
+        }
+    }
+
+    printf("[deploy] Found %zu versions for %s (newest first)\n", col.count, req->app_name);
 
     resp->success = 1;
     resp->n_backups = col.count;
@@ -410,67 +446,80 @@ static void handle_list_versions(const Satdeploy__DeployRequest *req,
 }
 
 /**
- * Callback to find a specific or most recent backup.
+ * Rollback search state - collects all backups for dial or specific hash lookup.
  */
+#define MAX_DIAL_ENTRIES 32
+
 typedef struct {
-    const char *target_hash;  /* NULL means find most recent */
-    char found_path[MAX_PATH_LEN];
-    int found;
+    char hash[16];
+    char path[MAX_PATH_LEN];
+    time_t mtime;  /* File modification time for chronological ordering */
+} backup_entry_t;
+
+typedef struct {
+    backup_entry_t entries[MAX_DIAL_ENTRIES];
+    int entry_count;
 } rollback_search_t;
 
-static void rollback_search_callback(const char *version, const char *timestamp,
-                                     const char *hash, const char *path,
-                                     void *user_data) {
+static void rollback_collect_callback(const char *version, const char *timestamp,
+                                      const char *hash, const char *path,
+                                      void *user_data) {
     (void)version;
     (void)timestamp;
     rollback_search_t *search = (rollback_search_t *)user_data;
 
-    if (search->target_hash != NULL) {
-        /* Looking for specific hash */
-        if (hash != NULL && strcmp(hash, search->target_hash) == 0) {
-            strncpy(search->found_path, path, MAX_PATH_LEN - 1);
-            search->found_path[MAX_PATH_LEN - 1] = '\0';
-            search->found = 1;
-        }
-    } else {
-        /* Looking for most recent - just take any (backup_list returns sorted) */
-        if (!search->found && path != NULL) {
-            strncpy(search->found_path, path, MAX_PATH_LEN - 1);
-            search->found_path[MAX_PATH_LEN - 1] = '\0';
-            search->found = 1;
+    if (search->entry_count >= MAX_DIAL_ENTRIES || !hash || !path) {
+        return;
+    }
+
+    /* Deduplicate: skip if this hash already exists */
+    for (int i = 0; i < search->entry_count; i++) {
+        if (strcmp(search->entries[i].hash, hash) == 0) {
+            return;
         }
     }
+
+    backup_entry_t *entry = &search->entries[search->entry_count];
+    strncpy(entry->hash, hash, sizeof(entry->hash) - 1);
+    entry->hash[sizeof(entry->hash) - 1] = '\0';
+    strncpy(entry->path, path, sizeof(entry->path) - 1);
+    entry->path[sizeof(entry->path) - 1] = '\0';
+
+    /* Get file mtime for proper chronological ordering */
+    struct stat st;
+    entry->mtime = (stat(path, &st) == 0) ? st.st_mtime : 0;
+
+    search->entry_count++;
 }
 
 static void handle_rollback(const Satdeploy__DeployRequest *req,
                             Satdeploy__DeployResponse *resp) {
     printf("[deploy] ROLLBACK command for %s, hash=%s\n",
            req->app_name ? req->app_name : "(null)",
-           req->rollback_hash ? req->rollback_hash : "(latest)");
+           req->rollback_hash ? req->rollback_hash : "(dial)");
 
-    if (req->app_name == NULL || strlen(req->app_name) == 0) {
+    if (!req->app_name || !req->app_name[0]) {
         resp->success = 0;
         resp->error_code = SATDEPLOY__DEPLOY_ERROR__ERR_APP_NOT_FOUND;
         resp->error_message = "No app_name specified";
         return;
     }
 
-    if (req->remote_path == NULL || strlen(req->remote_path) == 0) {
+    if (!req->remote_path || !req->remote_path[0]) {
         resp->success = 0;
         resp->error_code = SATDEPLOY__DEPLOY_ERROR__ERR_APP_NOT_FOUND;
         resp->error_message = "No remote_path specified";
         return;
     }
 
-    /* Search for backup to restore */
-    rollback_search_t search = {
-        .target_hash = (req->rollback_hash && strlen(req->rollback_hash) > 0)
-                       ? req->rollback_hash : NULL,
-        .found_path = {0},
-        .found = 0
-    };
+    /* Get current deployed hash */
+    char current_hash[16] = {0};
+    compute_file_checksum(req->remote_path, current_hash, sizeof(current_hash));
+    printf("[deploy] Current deployed hash: %s\n", current_hash[0] ? current_hash : "(none)");
 
-    int count = backup_list(req->app_name, rollback_search_callback, &search);
+    /* Collect all backups (single filesystem traversal) */
+    rollback_search_t search = {0};
+    int count = backup_list(req->app_name, rollback_collect_callback, &search);
 
     if (count < 0) {
         resp->success = 0;
@@ -479,31 +528,106 @@ static void handle_rollback(const Satdeploy__DeployRequest *req,
         return;
     }
 
-    if (count == 0 || !search.found) {
+    if (search.entry_count == 0) {
         resp->success = 0;
-        if (search.target_hash != NULL) {
-            resp->error_code = SATDEPLOY__DEPLOY_ERROR__ERR_BACKUP_NOT_FOUND;
-            resp->error_message = "Backup with specified hash not found";
-        } else {
-            resp->error_code = SATDEPLOY__DEPLOY_ERROR__ERR_NO_BACKUPS;
-            resp->error_message = "No backups available";
-        }
+        resp->error_code = SATDEPLOY__DEPLOY_ERROR__ERR_NO_BACKUPS;
+        resp->error_message = "No backups available";
         return;
     }
 
-    printf("[deploy] Restoring backup: %s -> %s\n", search.found_path, req->remote_path);
+    /* Find the backup to restore */
+    const char *target_hash = (req->rollback_hash && req->rollback_hash[0])
+                              ? req->rollback_hash : NULL;
+    backup_entry_t *selected = NULL;
+
+    if (target_hash) {
+        /* Specific hash requested - find exact match */
+        for (int i = 0; i < search.entry_count; i++) {
+            if (strcmp(search.entries[i].hash, target_hash) == 0) {
+                selected = &search.entries[i];
+                break;
+            }
+        }
+        if (!selected) {
+            resp->success = 0;
+            resp->error_code = SATDEPLOY__DEPLOY_ERROR__ERR_BACKUP_NOT_FOUND;
+            resp->error_message = "Backup with specified hash not found";
+            return;
+        }
+    } else {
+        /* Dial behavior: sort by mtime (newest first), pick next after current */
+
+        /* Sort entries by mtime descending (newest first) */
+        for (int i = 0; i < search.entry_count - 1; i++) {
+            for (int j = i + 1; j < search.entry_count; j++) {
+                if (search.entries[j].mtime > search.entries[i].mtime) {
+                    backup_entry_t tmp = search.entries[i];
+                    search.entries[i] = search.entries[j];
+                    search.entries[j] = tmp;
+                }
+            }
+        }
+
+        printf("[deploy] Dial entries (by time, newest first): ");
+        for (int i = 0; i < search.entry_count; i++) {
+            printf("%s ", search.entries[i].hash);
+        }
+        printf("\n");
+
+        /* Find current hash position */
+        int current_idx = -1;
+        for (int i = 0; i < search.entry_count; i++) {
+            if (current_hash[0] && strcmp(search.entries[i].hash, current_hash) == 0) {
+                current_idx = i;
+                break;
+            }
+        }
+
+        /* Pick next entry (wrap around) */
+        int next_idx = (current_idx < 0) ? 0 : (current_idx + 1) % search.entry_count;
+        selected = &search.entries[next_idx];
+
+        printf("[deploy] Dial: current=%s idx=%d -> next idx=%d hash=%s\n",
+               current_hash, current_idx, next_idx, selected->hash);
+    }
+
+    printf("[deploy] Restoring backup: %s -> %s\n", selected->path, req->remote_path);
+
+    /* Backup current version if not already in backups (check in-memory, no second traversal) */
+    if (current_hash[0]) {
+        int current_in_backups = 0;
+        for (int i = 0; i < search.entry_count; i++) {
+            if (strcmp(search.entries[i].hash, current_hash) == 0) {
+                current_in_backups = 1;
+                break;
+            }
+        }
+
+        if (!current_in_backups) {
+            char backup_path[MAX_PATH_LEN];
+            if (backup_create(req->app_name, req->remote_path, backup_path, sizeof(backup_path)) == 0) {
+                printf("[deploy] Backed up current version (%s) to: %s\n", current_hash, backup_path);
+            }
+        } else {
+            printf("[deploy] Current version (%s) already in backups\n", current_hash);
+        }
+    }
 
     /* Restore the backup */
-    if (backup_restore(search.found_path, req->remote_path) != 0) {
+    if (backup_restore(selected->path, req->remote_path) != 0) {
         resp->success = 0;
         resp->error_code = SATDEPLOY__DEPLOY_ERROR__ERR_RESTORE_FAILED;
         resp->error_message = "Failed to restore backup";
         return;
     }
 
+    /* Update metadata - trust the hash we already know, don't recompute */
+    app_metadata_save(req->app_name, req->remote_path, selected->hash);
+    printf("[deploy] Updated metadata: %s -> %s\n", req->app_name, selected->hash);
+
     /* Return the backup path that was restored */
     static char restored_path[MAX_PATH_LEN];
-    strncpy(restored_path, search.found_path, sizeof(restored_path) - 1);
+    strncpy(restored_path, selected->path, sizeof(restored_path) - 1);
     restored_path[sizeof(restored_path) - 1] = '\0';
 
     resp->success = 1;
@@ -620,6 +744,9 @@ static void handle_deploy(const Satdeploy__DeployRequest *req,
 
     /* Make executable */
     chmod(req->remote_path, 0755);
+
+    /* Create backup of newly deployed version to preserve deploy timestamp */
+    backup_create(req->app_name, req->remote_path, NULL, 0);
 
     /* Step 6: TODO - Start app via libparam
        For now, we skip this step */
@@ -835,7 +962,7 @@ static void handle_upload_end(const Satdeploy__DeployRequest *req,
 
     /* Install binary (copy temp to final location, handles cross-filesystem) */
     printf("[deploy] Installing binary to %s\n", upload_session.remote_path);
-    if (copy_file_to(upload_session.temp_path, upload_session.remote_path) != 0) {
+    if (copy_file(upload_session.temp_path, upload_session.remote_path) != 0) {
         upload_session_reset();
         resp->success = 0;
         resp->error_code = SATDEPLOY__DEPLOY_ERROR__ERR_INSTALL_FAILED;
@@ -846,6 +973,15 @@ static void handle_upload_end(const Satdeploy__DeployRequest *req,
 
     /* Make executable */
     chmod(upload_session.remote_path, 0755);
+
+    /* Create backup of newly deployed version to preserve deploy timestamp */
+    backup_create(upload_session.app_name, upload_session.remote_path, NULL, 0);
+
+    /* Save app metadata for status/list queries */
+    if (app_metadata_save(upload_session.app_name, upload_session.remote_path,
+                          upload_session.expected_checksum) != 0) {
+        printf("[deploy] Warning: Failed to save app metadata\n");
+    }
 
     /* Clear session (but don't delete files) */
     upload_session.active = 0;

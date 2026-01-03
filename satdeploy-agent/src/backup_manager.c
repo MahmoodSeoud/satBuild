@@ -13,22 +13,7 @@
 
 #include "satdeploy_agent.h"
 
-/* Simple SHA256 implementation using OpenSSL-style interface */
-/* For now, we use a simple hash. In production, use OpenSSL or similar. */
-
 #include <stdint.h>
-
-/* Simplified hash for testing - in production use proper SHA256 */
-static void simple_hash(const uint8_t *data, size_t len, uint8_t *out) {
-    uint32_t h = 0x811c9dc5;  /* FNV-1a offset basis */
-    for (size_t i = 0; i < len; i++) {
-        h ^= data[i];
-        h *= 0x01000193;  /* FNV-1a prime */
-    }
-    /* Extend to 32 bytes (we only use first 4 for the 8-char hex) */
-    memcpy(out, &h, 4);
-    memset(out + 4, 0, 28);
-}
 
 int compute_file_checksum(const char *path, char *hash_out, size_t hash_size) {
     if (hash_size < 9) {
@@ -40,10 +25,9 @@ int compute_file_checksum(const char *path, char *hash_out, size_t hash_size) {
         return -1;
     }
 
-    /* Read file and compute hash */
+    /* Read file and compute FNV-1a hash */
     uint8_t buffer[8192];
-    uint8_t hash[32];
-    uint32_t h = 0x811c9dc5;
+    uint32_t h = 0x811c9dc5;  /* FNV-1a offset basis */
 
     size_t n;
     while ((n = fread(buffer, 1, sizeof(buffer), f)) > 0) {
@@ -60,10 +44,7 @@ int compute_file_checksum(const char *path, char *hash_out, size_t hash_size) {
     return 0;
 }
 
-/**
- * Recursively create directory path.
- */
-static int ensure_dir(const char *path) {
+int mkdir_p(const char *path) {
     char tmp[MAX_PATH_LEN];
     char *p = NULL;
     size_t len;
@@ -87,14 +68,14 @@ static int ensure_dir(const char *path) {
     return 0;
 }
 
-/**
- * Copy a file.
- */
-static int copy_file(const char *src, const char *dst) {
+int copy_file(const char *src, const char *dst) {
     FILE *fin = fopen(src, "rb");
     if (fin == NULL) {
         return -1;
     }
+
+    /* Remove destination first (required for running binaries - ETXTBSY) */
+    unlink(dst);
 
     FILE *fout = fopen(dst, "wb");
     if (fout == NULL) {
@@ -149,21 +130,24 @@ int backup_create(const char *app_name, const char *src_path,
     char backup_dir[MAX_PATH_LEN];
     snprintf(backup_dir, sizeof(backup_dir), "%s/%s", BACKUP_DIR, app_name);
 
-    if (ensure_dir(BACKUP_DIR) != 0 || ensure_dir(backup_dir) != 0) {
+    if (mkdir_p(BACKUP_DIR) != 0 || mkdir_p(backup_dir) != 0) {
         return -1;
     }
 
-    /* Generate backup filename: YYYYMMDD-HHMMSS-<hash>.bak */
-    time_t now = time(NULL);
-    struct tm *tm = localtime(&now);
-
+    /* Generate backup filename: <hash>.bak (Carmack style - hash is unique key) */
     char backup_path[MAX_PATH_LEN];
-    snprintf(backup_path, sizeof(backup_path),
-             "%s/%04d%02d%02d-%02d%02d%02d-%s.bak",
-             backup_dir,
-             tm->tm_year + 1900, tm->tm_mon + 1, tm->tm_mday,
-             tm->tm_hour, tm->tm_min, tm->tm_sec,
-             hash);
+    snprintf(backup_path, sizeof(backup_path), "%s/%s.bak", backup_dir, hash);
+
+    /* Check if this version already backed up - skip if exists */
+    struct stat backup_st;
+    if (stat(backup_path, &backup_st) == 0) {
+        printf("[backup] File exists: %s (skip)\n", backup_path);
+        if (backup_path_out != NULL && backup_path_size > 0) {
+            strncpy(backup_path_out, backup_path, backup_path_size - 1);
+            backup_path_out[backup_path_size - 1] = '\0';
+        }
+        return 0;  /* Success - version already backed up */
+    }
 
     /* Copy file to backup */
     if (copy_file(src_path, backup_path) != 0) {
@@ -205,15 +189,16 @@ int backup_restore(const char *backup_path, const char *dest_path) {
 
 /**
  * Parse backup filename to extract version, timestamp, and hash.
- * Format: YYYYMMDD-HHMMSS-<hash>.bak
+ * New format: <hash>.bak (Carmack style)
+ * Old format: YYYYMMDD-HHMMSS-<hash>.bak (for migration)
  */
-static int parse_backup_filename(const char *filename,
+static int parse_backup_filename(const char *filename, const char *full_path,
                                   char *version, size_t version_size,
                                   char *timestamp, size_t timestamp_size,
                                   char *hash, size_t hash_size) {
     /* Check for .bak extension */
     size_t len = strlen(filename);
-    if (len < 24 || strcmp(filename + len - 4, ".bak") != 0) {
+    if (len < 5 || strcmp(filename + len - 4, ".bak") != 0) {
         return -1;
     }
 
@@ -222,30 +207,57 @@ static int parse_backup_filename(const char *filename,
     strncpy(name, filename, len - 4);
     name[len - 4] = '\0';
 
-    /* Parse: YYYYMMDD-HHMMSS-hash */
+    /* Try new format first: just hash (8 hex chars) */
+    if (len == 12) {  /* 8 chars hash + 4 chars ".bak" */
+        /* New Carmack format: {hash}.bak */
+        if (hash != NULL && hash_size > 0) {
+            strncpy(hash, name, hash_size - 1);
+            hash[hash_size - 1] = '\0';
+        }
+
+        if (version != NULL && version_size > 0) {
+            strncpy(version, name, version_size - 1);
+            version[version_size - 1] = '\0';
+        }
+
+        /* Get timestamp from file mtime (ISO 8601 format) */
+        if (timestamp != NULL && timestamp_size > 0 && full_path != NULL) {
+            struct stat st;
+            if (stat(full_path, &st) == 0) {
+                struct tm *tm = localtime(&st.st_mtime);
+                snprintf(timestamp, timestamp_size, "%04d-%02d-%02dT%02d:%02d:%02d",
+                         tm->tm_year + 1900, tm->tm_mon + 1, tm->tm_mday,
+                         tm->tm_hour, tm->tm_min, tm->tm_sec);
+            } else {
+                strncpy(timestamp, "unknown", timestamp_size - 1);
+            }
+        }
+        return 0;
+    }
+
+    /* Try old format: YYYYMMDD-HHMMSS-hash */
     int year, mon, day, hour, min, sec;
     char hash_buf[32];
 
     if (sscanf(name, "%4d%2d%2d-%2d%2d%2d-%s",
-               &year, &mon, &day, &hour, &min, &sec, hash_buf) != 7) {
-        return -1;
+               &year, &mon, &day, &hour, &min, &sec, hash_buf) == 7) {
+        if (version != NULL && version_size > 0) {
+            snprintf(version, version_size, "%s", name);
+        }
+
+        if (timestamp != NULL && timestamp_size > 0) {
+            snprintf(timestamp, timestamp_size, "%04d-%02d-%02dT%02d:%02d:%02d",
+                     year, mon, day, hour, min, sec);
+        }
+
+        if (hash != NULL && hash_size > 0) {
+            strncpy(hash, hash_buf, hash_size - 1);
+            hash[hash_size - 1] = '\0';
+        }
+        return 0;
     }
 
-    if (version != NULL && version_size > 0) {
-        snprintf(version, version_size, "%s", name);
-    }
-
-    if (timestamp != NULL && timestamp_size > 0) {
-        snprintf(timestamp, timestamp_size, "%04d-%02d-%02d %02d:%02d:%02d",
-                 year, mon, day, hour, min, sec);
-    }
-
-    if (hash != NULL && hash_size > 0) {
-        strncpy(hash, hash_buf, hash_size - 1);
-        hash[hash_size - 1] = '\0';
-    }
-
-    return 0;
+    return -1;  /* Unknown format */
 }
 
 int backup_list(const char *app_name, backup_list_callback callback, void *user_data) {
@@ -270,11 +282,11 @@ int backup_list(const char *app_name, backup_list_callback callback, void *user_
         }
 
         char version[64], timestamp[32], hash[16], path[MAX_PATH_LEN];
+        snprintf(path, sizeof(path), "%s/%s", backup_dir, entry->d_name);
 
-        if (parse_backup_filename(entry->d_name, version, sizeof(version),
+        if (parse_backup_filename(entry->d_name, path, version, sizeof(version),
                                    timestamp, sizeof(timestamp),
                                    hash, sizeof(hash)) == 0) {
-            snprintf(path, sizeof(path), "%s/%s", backup_dir, entry->d_name);
             callback(version, timestamp, hash, path, user_data);
             count++;
         }

@@ -179,11 +179,14 @@ static int satdeploy_deploy_cmd(struct slash *slash)
     char *local_path = NULL;
     char *remote_path = NULL;
 
+    int force = 0;
+
     optparse_t *parser = optparse_new("satdeploy deploy", "<app_name>");
     optparse_add_help(parser);
     optparse_add_unsigned(parser, 'n', "node", "NUM", 0, &node, "Target node (default: from config)");
     optparse_add_string(parser, 'f', "file", "PATH", &local_path, "Local binary path (overrides config)");
     optparse_add_string(parser, 'r', "remote", "PATH", &remote_path, "Remote installation path");
+    optparse_add_set(parser, 'F', "force", 1, &force, "Force deploy even if same version");
 
     int argi = optparse_parse(parser, slash->argc - 1, (const char **)slash->argv + 1);
     if (argi < 0) {
@@ -253,6 +256,28 @@ static int satdeploy_deploy_cmd(struct slash *slash)
     if (compute_checksum(local_path, checksum, sizeof(checksum)) < 0) {
         printf("Error: Cannot compute checksum for '%s'\n", local_path);
         return SLASH_EIO;
+    }
+
+    /* Check if already deployed with same hash (skip if --force) */
+    if (!force) {
+        Satdeploy__DeployRequest status_req = SATDEPLOY__DEPLOY_REQUEST__INIT;
+        status_req.command = SATDEPLOY__DEPLOY_COMMAND__CMD_STATUS;
+
+        Satdeploy__DeployResponse *status_resp = NULL;
+        if (send_deploy_request(node, &status_req, &status_resp) == 0 && status_resp->success) {
+            for (size_t i = 0; i < status_resp->n_apps; i++) {
+                if (strcmp(status_resp->apps[i]->app_name, app_name) == 0) {
+                    if (status_resp->apps[i]->binary_hash &&
+                        strcmp(status_resp->apps[i]->binary_hash, checksum) == 0) {
+                        printf("Already deployed: %s (%s)\n", app_name, checksum);
+                        satdeploy__deploy_response__free_unpacked(status_resp, NULL);
+                        return SLASH_SUCCESS;
+                    }
+                    break;
+                }
+            }
+        }
+        satdeploy__deploy_response__free_unpacked(status_resp, NULL);
     }
 
     /* Calculate number of chunks needed */
@@ -439,9 +464,34 @@ static int satdeploy_rollback_cmd(struct slash *slash)
         return SLASH_EIO;
     }
 
+    /* Show which backup was restored */
     char success_msg[256];
-    snprintf(success_msg, sizeof(success_msg), "Rolled back %s", app_name);
+    if (resp->backup_path && strlen(resp->backup_path) > 0) {
+        /* Extract hash from backup path - new format: <hash>.bak */
+        const char *filename = strrchr(resp->backup_path, '/');
+        filename = filename ? filename + 1 : resp->backup_path;
+
+        char restored_hash[16] = {0};
+        size_t len = strlen(filename);
+        if (len > 4 && strcmp(filename + len - 4, ".bak") == 0) {
+            /* Copy hash (everything before .bak, max 8 chars) */
+            size_t hash_len = len - 4;
+            if (hash_len > 8) hash_len = 8;
+            strncpy(restored_hash, filename, hash_len);
+            restored_hash[hash_len] = '\0';
+        }
+
+        if (restored_hash[0]) {
+            snprintf(success_msg, sizeof(success_msg), "Rolled back %s to %s",
+                     app_name, restored_hash);
+        } else {
+            snprintf(success_msg, sizeof(success_msg), "Rolled back %s", app_name);
+        }
+    } else {
+        snprintf(success_msg, sizeof(success_msg), "Rolled back %s", app_name);
+    }
     output_success(success_msg);
+
     satdeploy__deploy_response__free_unpacked(resp, NULL);
     return SLASH_SUCCESS;
 }
@@ -480,27 +530,7 @@ static int satdeploy_list_cmd(struct slash *slash)
         }
     }
 
-    /* First, query status to get currently deployed hash */
-    Satdeploy__DeployRequest status_req = SATDEPLOY__DEPLOY_REQUEST__INIT;
-    status_req.command = SATDEPLOY__DEPLOY_COMMAND__CMD_STATUS;
-
-    Satdeploy__DeployResponse *status_resp = NULL;
-    char current_hash[32] = {0};
-
-    if (send_deploy_request(node, &status_req, &status_resp) == 0 && status_resp->success) {
-        /* Find the app in status and get its current hash */
-        for (size_t i = 0; i < status_resp->n_apps; i++) {
-            if (strcmp(status_resp->apps[i]->app_name, app_name) == 0) {
-                if (status_resp->apps[i]->binary_hash) {
-                    strncpy(current_hash, status_resp->apps[i]->binary_hash, sizeof(current_hash) - 1);
-                }
-                break;
-            }
-        }
-        satdeploy__deploy_response__free_unpacked(status_resp, NULL);
-    }
-
-    /* Now query backups */
+    /* Query versions (agent includes current deployed version in response) */
     Satdeploy__DeployRequest req = SATDEPLOY__DEPLOY_REQUEST__INIT;
     req.command = SATDEPLOY__DEPLOY_COMMAND__CMD_LIST_VERSIONS;
     req.app_name = app_name;
@@ -533,8 +563,8 @@ static int satdeploy_list_cmd(struct slash *slash)
 
     for (size_t i = 0; i < resp->n_backups; i++) {
         Satdeploy__BackupEntry *backup = resp->backups[i];
-        int is_deployed = (current_hash[0] && backup->hash &&
-                          strcmp(current_hash, backup->hash) == 0);
+        /* Only first entry (version="current") is deployed */
+        int is_deployed = (backup->version && strcmp(backup->version, "current") == 0);
 
         output_version_row(backup->hash, backup->timestamp, is_deployed);
     }

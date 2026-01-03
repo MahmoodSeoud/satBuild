@@ -189,7 +189,7 @@ int main(int argc, char *argv[]) {
         }
     }
 
-    printf("satdeploy-agent v0.1.0\n");
+    printf("satdeploy-agent v8\n");
     printf("  Interface: %s\n", interface);
     printf("  Port/Device: %s\n", port);
     printf("  CSP node: %d\n", node_addr);

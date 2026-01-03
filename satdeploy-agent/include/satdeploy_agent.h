@@ -45,11 +45,32 @@ int deploy_handler_init(void);
  */
 void deploy_handler_loop(void);
 
+/* --- Shared utilities --- */
+
 /**
- * Compute SHA256 checksum of a file.
+ * Recursively create directory path (like mkdir -p).
+ *
+ * @param path Directory path to create.
+ * @return 0 on success, -1 on failure.
+ */
+int mkdir_p(const char *path);
+
+/**
+ * Copy a file, handling ETXTBSY (running binary replacement).
+ *
+ * @param src Source file path.
+ * @param dst Destination file path.
+ * @return 0 on success, -1 on failure.
+ */
+int copy_file(const char *src, const char *dst);
+
+/**
+ * Compute FNV-1a checksum of a file.
+ *
+ * Uses FNV-1a hash for fast deduplication (not cryptographic).
  *
  * @param path Path to the file.
- * @param hash_out Buffer to store the first 8 chars of hex digest.
+ * @param hash_out Buffer to store 8-char hex digest.
  * @param hash_size Size of hash_out buffer (must be >= 9).
  * @return 0 on success, -1 on failure.
  */
@@ -100,5 +121,49 @@ int backup_list(const char *app_name, backup_list_callback callback, void *user_
  */
 int dtp_download_file(uint32_t server_node, uint16_t payload_id,
                       const char *dest_path, uint32_t expected_size);
+
+/**
+ * Save app deployment metadata.
+ *
+ * @param app_name Application name.
+ * @param remote_path Path where app is installed.
+ * @param binary_hash Hash of the deployed binary.
+ * @return 0 on success, -1 on failure.
+ */
+int app_metadata_save(const char *app_name, const char *remote_path,
+                      const char *binary_hash);
+
+/**
+ * Get app deployment metadata.
+ *
+ * @param app_name Application name.
+ * @param remote_path Buffer for remote path (can be NULL).
+ * @param path_size Size of remote_path buffer.
+ * @param binary_hash Buffer for hash (can be NULL).
+ * @param hash_size Size of binary_hash buffer.
+ * @param deployed_at Buffer for timestamp (can be NULL).
+ * @param time_size Size of deployed_at buffer.
+ * @return 0 on success, -1 if app not found.
+ */
+int app_metadata_get(const char *app_name, char *remote_path, size_t path_size,
+                     char *binary_hash, size_t hash_size,
+                     char *deployed_at, size_t time_size);
+
+/**
+ * List all deployed apps.
+ *
+ * @param callback Function called for each app.
+ * @param user_data User data passed to callback.
+ * @return Number of apps.
+ */
+typedef void (*app_metadata_callback)(const char *app_name, const char *remote_path,
+                                      const char *binary_hash, const char *deployed_at,
+                                      void *user_data);
+int app_metadata_list(app_metadata_callback callback, void *user_data);
+
+/**
+ * Reload metadata from disk (clears cache).
+ */
+void app_metadata_reload(void);
 
 #endif /* SATDEPLOY_AGENT_H */
