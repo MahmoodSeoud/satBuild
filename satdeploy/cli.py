@@ -268,66 +268,47 @@ def init(config_dir: Path | None):
     click.echo(click.style("Setting up satdeploy configuration...", bold=True))
     click.echo("")
 
-    modules = {}
-    while True:
-        module_name = click.prompt("Module name", default="default" if not modules else None)
-        transport = click.prompt(
-            f"  {module_name} transport type",
-            type=click.Choice(["ssh", "csp"]),
-            default="ssh",
+    name = click.prompt("Target name", default="default")
+    transport = click.prompt(
+        "Transport type",
+        type=click.Choice(["ssh", "csp"]),
+        default="ssh",
+    )
+
+    data = {"name": name, "transport": transport}
+
+    if transport == "ssh":
+        data["host"] = click.prompt("Target host (IP or hostname)")
+        data["user"] = click.prompt("SSH user", default="root")
+    else:  # csp
+        data["zmq_endpoint"] = click.prompt(
+            "ZMQ endpoint",
+            default="tcp://localhost:4040",
+        )
+        data["agent_node"] = click.prompt(
+            "Agent CSP node",
+            type=int,
+            default=5424,
+        )
+        data["ground_node"] = click.prompt(
+            "Ground CSP node",
+            type=int,
+            default=4040,
+        )
+        data["appsys_node"] = click.prompt(
+            "App-sys-manager CSP node",
+            type=int,
+            default=10,
         )
 
-        if transport == "ssh":
-            host = click.prompt(f"  {module_name} host (IP or hostname)")
-            user = click.prompt(f"  {module_name} user", default="root")
-            modules[module_name] = {
-                "transport": "ssh",
-                "host": host,
-                "user": user,
-            }
-        else:  # csp
-            zmq_endpoint = click.prompt(
-                f"  {module_name} ZMQ endpoint",
-                default="tcp://localhost:4040",
-            )
-            agent_node = click.prompt(
-                f"  {module_name} agent CSP node",
-                type=int,
-                default=5424,
-            )
-            ground_node = click.prompt(
-                f"  {module_name} ground CSP node",
-                type=int,
-                default=4040,
-            )
-            appsys_node = click.prompt(
-                f"  {module_name} app-sys-manager CSP node",
-                type=int,
-                default=10,
-            )
-            modules[module_name] = {
-                "transport": "csp",
-                "zmq_endpoint": zmq_endpoint,
-                "agent_node": agent_node,
-                "ground_node": ground_node,
-                "appsys_node": appsys_node,
-            }
-
-        click.echo("")
-        if not click.confirm("Add another module?", default=False):
-            break
-
-    data = {
-        "modules": modules,
-        "backup_dir": "/opt/satdeploy/backups",
-        "max_backups": 10,
-        "apps": {
-            "example_app": {
-                "local": "/path/to/local/binary",
-                "remote": "/path/to/remote/binary",
-                "service": None,
-                "param": None,
-            },
+    data["backup_dir"] = "/opt/satdeploy/backups"
+    data["max_backups"] = 10
+    data["apps"] = {
+        "example_app": {
+            "local": "/path/to/local/binary",
+            "remote": "/path/to/remote/binary",
+            "service": None,
+            "param": None,
         },
     }
 
@@ -339,7 +320,6 @@ def init(config_dir: Path | None):
 @main.command()
 @click.argument("apps", nargs=-1)
 @click.option("--all", "all_apps", is_flag=True, help="Deploy all apps")
-@click.option("--module", "-m", required=True, help="Target module")
 @click.option("--clean-vmem", is_flag=True, help="Clear vmem for deployed apps")
 @click.option(
     "--local",
@@ -356,12 +336,11 @@ def init(config_dir: Path | None):
 def push(
     apps: tuple[str, ...],
     all_apps: bool,
-    module: str,
     clean_vmem: bool,
     local: str | None,
     config_dir: Path | None,
 ):
-    """Deploy one or more apps to a module.
+    """Deploy one or more apps to a target.
 
     APPS are the names of the applications to deploy.
     """
@@ -384,11 +363,7 @@ def push(
         if not apps:
             raise SatDeployError("No apps configured")
 
-    # Get target module
-    try:
-        module_config = config.get_module(module)
-    except KeyError:
-        raise SatDeployError(f"Module '{module}' not found in config")
+    module_config = config.get_target()
 
     # Only allow single app when using --local override
     if local and len(apps) > 1:
@@ -436,7 +411,7 @@ def push(
                     local_hash = sha256.hexdigest()[:8]
 
                     history.record(DeploymentRecord(
-                        module=module,
+                        module=config.module_name,
                         app=app,
                         binary_hash=local_hash,
                         remote_path=remote_path,
@@ -447,7 +422,7 @@ def push(
                     click.echo(success(f"Deployed {app} ({local_hash})"))
                 else:
                     history.record(DeploymentRecord(
-                        module=module,
+                        module=config.module_name,
                         app=app,
                         binary_hash="",
                         remote_path=remote_path,
@@ -459,7 +434,7 @@ def push(
 
         except TransportError as e:
             history.record(DeploymentRecord(
-                module=module,
+                module=config.module_name,
                 app=apps[0] if apps else "",
                 binary_hash="",
                 remote_path="",
@@ -506,7 +481,7 @@ def push(
                     )
                     # Still record in history so it becomes the "current" version
                     history.record(DeploymentRecord(
-                        module=module,
+                        module=config.module_name,
                         app=app,
                         binary_hash=local_hash,
                         remote_path=remote_path,
@@ -552,7 +527,7 @@ def push(
                     start_services(service_manager, services_to_manage, counter)
 
                     history.record(DeploymentRecord(
-                        module=module,
+                        module=config.module_name,
                         app=app,
                         binary_hash=local_hash,
                         remote_path=remote_path,
@@ -591,7 +566,7 @@ def push(
                 start_services(service_manager, services_to_manage, counter)
 
                 history.record(DeploymentRecord(
-                    module=module,
+                    module=config.module_name,
                     app=app,
                     binary_hash=local_hash,
                     remote_path=remote_path,
@@ -606,7 +581,7 @@ def push(
     except SSHError as e:
         # Log failed deployment
         history.record(DeploymentRecord(
-            module=module,
+            module=config.module_name,
             app=apps[0] if apps else "",
             binary_hash="",
             remote_path="",
@@ -618,14 +593,13 @@ def push(
 
 
 @main.command()
-@click.option("--module", "-m", required=True, help="Target module")
 @click.option(
     "--config-dir",
     type=click.Path(path_type=Path),
     default=None,
     help="Config directory (default: ~/.satdeploy)",
 )
-def status(module: str, config_dir: Path | None):
+def status(config_dir: Path | None):
     """Show status of deployed apps and services."""
     config_dir = config_dir or DEFAULT_CONFIG_DIR
     config = Config(config_dir=config_dir)
@@ -635,10 +609,7 @@ def status(module: str, config_dir: Path | None):
             f"Config not found at {config.config_path}. Run 'satdeploy init' first."
         )
 
-    try:
-        module_config = config.get_module(module)
-    except KeyError:
-        raise SatDeployError(f"Module '{module}' not found in config")
+    module_config = config.get_target()
     apps = config.apps
     history = get_history(config_dir)
 
@@ -785,14 +756,13 @@ def status(module: str, config_dir: Path | None):
 
 @main.command("list")
 @click.argument("app")
-@click.option("--module", "-m", required=True, help="Target module")
 @click.option(
     "--config-dir",
     type=click.Path(path_type=Path),
     default=None,
     help="Config directory (default: ~/.satdeploy)",
 )
-def list_backups(app: str, module: str, config_dir: Path | None):
+def list_backups(app: str, config_dir: Path | None):
     """List all versions of an app (deployed + backups).
 
     APP is the name of the application to list versions for.
@@ -809,11 +779,7 @@ def list_backups(app: str, module: str, config_dir: Path | None):
         )
 
     app_config = get_app_config_or_error(config, app)
-
-    try:
-        module_config = config.get_module(module)
-    except KeyError:
-        raise SatDeployError(f"Module '{module}' not found in config")
+    module_config = config.get_target()
     history = get_history(config_dir)
 
     # Get currently deployed version from history
@@ -965,14 +931,13 @@ def list_backups(app: str, module: str, config_dir: Path | None):
 @main.command()
 @click.argument("app")
 @click.argument("hash", required=False, default=None)
-@click.option("--module", "-m", required=True, help="Target module")
 @click.option(
     "--config-dir",
     type=click.Path(path_type=Path),
     default=None,
     help="Config directory (default: ~/.satdeploy)",
 )
-def rollback(app: str, hash: str | None, module: str, config_dir: Path | None):  # noqa: A002
+def rollback(app: str, hash: str | None, config_dir: Path | None):  # noqa: A002
     """Rollback to a previous version.
 
     APP is the name of the application to rollback.
@@ -991,10 +956,7 @@ def rollback(app: str, hash: str | None, module: str, config_dir: Path | None): 
 
     remote_path = app_config.remote
     service = app_config.service
-    try:
-        module_config = config.get_module(module)
-    except KeyError:
-        raise SatDeployError(f"Module '{module}' not found in config")
+    module_config = config.get_target()
     history = get_history(config_dir)
     backup_path = None
 
@@ -1014,7 +976,7 @@ def rollback(app: str, hash: str | None, module: str, config_dir: Path | None): 
 
             if result.success:
                 history.record(DeploymentRecord(
-                    module=module,
+                    module=config.module_name,
                     app=app,
                     binary_hash=target_hash or "previous",
                     remote_path=remote_path,
@@ -1024,7 +986,7 @@ def rollback(app: str, hash: str | None, module: str, config_dir: Path | None): 
                 click.echo(success(f"Rolled back {app}"))
             else:
                 history.record(DeploymentRecord(
-                    module=module,
+                    module=config.module_name,
                     app=app,
                     binary_hash="",
                     remote_path=remote_path,
@@ -1036,7 +998,7 @@ def rollback(app: str, hash: str | None, module: str, config_dir: Path | None): 
 
         except TransportError as e:
             history.record(DeploymentRecord(
-                module=module,
+                module=config.module_name,
                 app=app,
                 binary_hash="",
                 remote_path=remote_path,
@@ -1144,6 +1106,7 @@ def rollback(app: str, hash: str | None, module: str, config_dir: Path | None): 
 
             # Log successful rollback
             history.record(DeploymentRecord(
+                module=config.module_name,
                 app=app,
                 binary_hash=backup_hash,
                 remote_path=remote_path,
@@ -1157,6 +1120,7 @@ def rollback(app: str, hash: str | None, module: str, config_dir: Path | None): 
     except SSHError as e:
         # Log failed rollback
         history.record(DeploymentRecord(
+            module=config.module_name,
             app=app,
             binary_hash="",
             remote_path=remote_path,
@@ -1170,7 +1134,6 @@ def rollback(app: str, hash: str | None, module: str, config_dir: Path | None): 
 
 @main.command()
 @click.argument("app")
-@click.option("--module", "-m", required=True, help="Target module")
 @click.option(
     "--lines",
     "-n",
@@ -1184,7 +1147,7 @@ def rollback(app: str, hash: str | None, module: str, config_dir: Path | None): 
     default=None,
     help="Config directory (default: ~/.satdeploy)",
 )
-def logs(app: str, module: str, lines: int, config_dir: Path | None):
+def logs(app: str, lines: int, config_dir: Path | None):
     """Show logs for an app's service.
 
     APP is the name of the application to show logs for.
@@ -1205,11 +1168,8 @@ def logs(app: str, module: str, lines: int, config_dir: Path | None):
             f"App '{app}' is a library and has no service. Cannot show logs."
         )
 
-    try:
-        module_config = config.get_module(module)
-        target = {"host": module_config.host, "user": module_config.user}
-    except KeyError:
-        raise SatDeployError(f"Module '{module}' not found in config")
+    module_config = config.get_target()
+    target = {"host": module_config.host, "user": module_config.user}
 
     try:
         with SSHClient(host=target["host"], user=target["user"]) as ssh:
@@ -1223,177 +1183,3 @@ def logs(app: str, module: str, lines: int, config_dir: Path | None):
         raise SatDeployError(str(e))
 
 
-@main.group(cls=ColoredGroup)
-def fleet():
-    """Fleet management commands."""
-    pass
-
-
-def check_module_online(host: str, user: str) -> bool:
-    """Check if a module is reachable via SSH.
-
-    Args:
-        host: The module's hostname or IP.
-        user: The SSH user.
-
-    Returns:
-        True if module is reachable, False otherwise.
-    """
-    try:
-        with SSHClient(host=host, user=user) as ssh:
-            return True
-    except SSHError:
-        return False
-
-
-@fleet.command("status")
-@click.option(
-    "--config-dir",
-    type=click.Path(path_type=Path),
-    default=None,
-    help="Config directory (default: ~/.satdeploy)",
-)
-def fleet_status(config_dir: Path | None):
-    """Show status of all modules."""
-    config_dir = config_dir or DEFAULT_CONFIG_DIR
-    config = Config(config_dir=config_dir)
-
-    if config.load() is None:
-        raise SatDeployError(
-            f"Config not found at {config.config_path}. Run 'satdeploy init' first."
-        )
-
-    modules = config.get_modules()
-
-    if not modules:
-        click.echo("No modules configured.")
-        return
-
-    click.echo(click.style("Fleet Status", bold=True))
-    click.echo("")
-
-    for module_name, module in modules.items():
-        online = check_module_online(module.host, module.user)
-
-        if online:
-            status_symbol = click.style(SYMBOLS["check"], fg="green")
-            status_text = click.style("online", fg="green")
-        else:
-            status_symbol = click.style(SYMBOLS["cross"], fg="red")
-            status_text = click.style("offline", fg="red")
-
-        click.echo(f"  {status_symbol} {module_name:<12} {status_text}")
-
-
-@main.command()
-@click.argument("module1")
-@click.argument("module2")
-@click.option(
-    "--config-dir",
-    type=click.Path(path_type=Path),
-    default=None,
-    help="Config directory (default: ~/.satdeploy)",
-)
-def diff(module1: str, module2: str, config_dir: Path | None):
-    """Compare two modules.
-
-    MODULE1 and MODULE2 are the names of the modules to compare.
-    """
-    config_dir = config_dir or DEFAULT_CONFIG_DIR
-    config = Config(config_dir=config_dir)
-
-    if config.load() is None:
-        raise SatDeployError(
-            f"Config not found at {config.config_path}. Run 'satdeploy init' first."
-        )
-
-    history = get_history(config_dir)
-    state1 = history.get_module_state(module1)
-    state2 = history.get_module_state(module2)
-
-    all_apps = set(state1.keys()) | set(state2.keys())
-
-    if not all_apps:
-        click.echo("No deployment history for either module.")
-        return
-
-    click.echo(click.style(f"Comparing {module1} vs {module2}", bold=True))
-    click.echo("")
-
-    # Header
-    header = f"    {'APP':<16} {module1:<12} {module2:<12} {'STATUS'}"
-    click.echo(click.style(header, fg="bright_black"))
-    click.echo(click.style("    " + "-" * 50, fg="bright_black"))
-
-    for app_name in sorted(all_apps):
-        hash1 = state1[app_name].binary_hash if app_name in state1 else "-"
-        hash2 = state2[app_name].binary_hash if app_name in state2 else "-"
-
-        if hash1 == hash2:
-            symbol = click.style(SYMBOLS["check"], fg="green")
-            status = click.style("match", fg="green")
-        else:
-            symbol = click.style(SYMBOLS["cross"], fg="yellow")
-            status = click.style("differs", fg="yellow")
-
-        click.echo(f"  {symbol} {app_name:<16} {hash1:<12} {hash2:<12} {status}")
-
-
-@main.command()
-@click.argument("source")
-@click.argument("target")
-@click.option("--clean-vmem", is_flag=True, help="Clear vmem on target")
-@click.option("--yes", "-y", is_flag=True, help="Skip confirmation")
-@click.option(
-    "--config-dir",
-    type=click.Path(path_type=Path),
-    default=None,
-    help="Config directory (default: ~/.satdeploy)",
-)
-def sync(source: str, target: str, clean_vmem: bool, yes: bool, config_dir: Path | None):
-    """Sync target module to match source.
-
-    SOURCE is the module to sync from.
-    TARGET is the module to sync to.
-    """
-    config_dir = config_dir or DEFAULT_CONFIG_DIR
-    config = Config(config_dir=config_dir)
-
-    if config.load() is None:
-        raise SatDeployError(
-            f"Config not found at {config.config_path}. Run 'satdeploy init' first."
-        )
-
-    history = get_history(config_dir)
-
-    # Get diff to show what will be synced
-    state_source = history.get_module_state(source)
-    state_target = history.get_module_state(target)
-
-    all_apps = set(state_source.keys()) | set(state_target.keys())
-    apps_to_sync = []
-
-    for app_name in sorted(all_apps):
-        hash_source = state_source[app_name].binary_hash if app_name in state_source else None
-        hash_target = state_target[app_name].binary_hash if app_name in state_target else None
-
-        if hash_source != hash_target:
-            apps_to_sync.append(app_name)
-
-    if not apps_to_sync:
-        click.echo(f"Modules {source} and {target} are already in sync.")
-        return
-
-    click.echo(click.style(f"Syncing {target} to match {source}", bold=True))
-    click.echo("")
-    click.echo(f"Apps to sync: {', '.join(apps_to_sync)}")
-    if clean_vmem:
-        click.echo("Will also clear vmem directories.")
-    click.echo("")
-
-    if not yes:
-        if not click.confirm("Proceed?"):
-            click.echo("Aborted.")
-            return
-
-    click.echo(success(f"Sync from {source} to {target} would proceed (not yet implemented)"))

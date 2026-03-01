@@ -86,15 +86,14 @@ class TestPushWithCSPTransport:
         """Create config with CSP module."""
         config_yaml = config_dir / "config.yaml"
         config_yaml.write_text(f"""
-modules:
-  sat1:
-    transport: csp
-    zmq_endpoint: tcp://localhost:4040
-    agent_node: 5424
-    ground_node: 4040
-    appsys_node: 10
-    app_nodes:
-      dipp: 5
+name: sat1
+transport: csp
+zmq_endpoint: tcp://localhost:4040
+agent_node: 5424
+ground_node: 4040
+appsys_node: 10
+app_nodes:
+  dipp: 5
 
 backup_dir: /opt/satdeploy/backups
 max_backups: 10
@@ -119,7 +118,7 @@ apps:
         with patch("satdeploy.cli.get_transport", return_value=mock_transport):
             result = runner.invoke(
                 main,
-                ["push", "dipp", "-m", "sat1", "--config-dir", str(csp_config)],
+                ["push", "dipp", "--config-dir", str(csp_config)],
             )
 
         assert result.exit_code == 0, f"Output: {result.output}"
@@ -144,7 +143,7 @@ apps:
         with patch("satdeploy.cli.get_transport", return_value=mock_transport):
             result = runner.invoke(
                 main,
-                ["push", "dipp", "-m", "sat1", "--config-dir", str(csp_config)],
+                ["push", "dipp", "--config-dir", str(csp_config)],
             )
 
         assert result.exit_code == 0
@@ -162,7 +161,7 @@ apps:
         with patch("satdeploy.cli.get_transport", return_value=mock_transport):
             result = runner.invoke(
                 main,
-                ["push", "dipp", "-m", "sat1", "--config-dir", str(csp_config)],
+                ["push", "dipp", "--config-dir", str(csp_config)],
             )
 
         assert result.exit_code == 1
@@ -191,13 +190,12 @@ class TestRollbackWithCSPTransport:
         """Create config with CSP module."""
         config_yaml = config_dir / "config.yaml"
         config_yaml.write_text(f"""
-modules:
-  sat1:
-    transport: csp
-    zmq_endpoint: tcp://localhost:4040
-    agent_node: 5424
-    ground_node: 4040
-    appsys_node: 10
+name: sat1
+transport: csp
+zmq_endpoint: tcp://localhost:4040
+agent_node: 5424
+ground_node: 4040
+appsys_node: 10
 
 backup_dir: /opt/satdeploy/backups
 max_backups: 10
@@ -219,7 +217,7 @@ apps:
         with patch("satdeploy.cli.get_transport", return_value=mock_transport):
             result = runner.invoke(
                 main,
-                ["rollback", "dipp", "-m", "sat1", "--config-dir", str(csp_config)],
+                ["rollback", "dipp", "--config-dir", str(csp_config)],
             )
 
         assert result.exit_code == 0, f"Output: {result.output}"
@@ -240,7 +238,7 @@ apps:
         with patch("satdeploy.cli.get_transport", return_value=mock_transport):
             result = runner.invoke(
                 main,
-                ["rollback", "dipp", "abc12345", "-m", "sat1", "--config-dir", str(csp_config)],
+                ["rollback", "dipp", "abc12345", "--config-dir", str(csp_config)],
             )
 
         assert result.exit_code == 0, f"Output: {result.output}"
@@ -260,7 +258,7 @@ apps:
         with patch("satdeploy.cli.get_transport", return_value=mock_transport):
             result = runner.invoke(
                 main,
-                ["rollback", "dipp", "-m", "sat1", "--config-dir", str(csp_config)],
+                ["rollback", "dipp", "--config-dir", str(csp_config)],
             )
 
         assert result.exit_code == 1
@@ -289,13 +287,12 @@ class TestStatusWithCSPTransport:
         """Create config with CSP module."""
         config_yaml = config_dir / "config.yaml"
         config_yaml.write_text(f"""
-modules:
-  sat1:
-    transport: csp
-    zmq_endpoint: tcp://localhost:4040
-    agent_node: 5424
-    ground_node: 4040
-    appsys_node: 10
+name: sat1
+transport: csp
+zmq_endpoint: tcp://localhost:4040
+agent_node: 5424
+ground_node: 4040
+appsys_node: 10
 
 backup_dir: /opt/satdeploy/backups
 max_backups: 10
@@ -326,7 +323,7 @@ apps:
         with patch("satdeploy.cli.get_transport", return_value=mock_transport):
             result = runner.invoke(
                 main,
-                ["status", "-m", "sat1", "--config-dir", str(csp_config)],
+                ["status", "--config-dir", str(csp_config)],
             )
 
         assert result.exit_code == 0, f"Output: {result.output}"
@@ -359,13 +356,12 @@ class TestListWithCSPTransport:
         """Create config with CSP module."""
         config_yaml = config_dir / "config.yaml"
         config_yaml.write_text(f"""
-modules:
-  sat1:
-    transport: csp
-    zmq_endpoint: tcp://localhost:4040
-    agent_node: 5424
-    ground_node: 4040
-    appsys_node: 10
+name: sat1
+transport: csp
+zmq_endpoint: tcp://localhost:4040
+agent_node: 5424
+ground_node: 4040
+appsys_node: 10
 
 backup_dir: /opt/satdeploy/backups
 max_backups: 10
@@ -402,7 +398,7 @@ apps:
         with patch("satdeploy.cli.get_transport", return_value=mock_transport):
             result = runner.invoke(
                 main,
-                ["list", "dipp", "-m", "sat1", "--config-dir", str(csp_config)],
+                ["list", "dipp", "--config-dir", str(csp_config)],
             )
 
         assert result.exit_code == 0, f"Output: {result.output}"

@@ -12,17 +12,14 @@ from satdeploy.output import SYMBOLS
 from satdeploy.services import ServiceStatus
 
 
-def make_module_config(apps: dict) -> dict:
-    """Create a module-based config for testing."""
+def make_config(apps: dict) -> dict:
+    """Create a flat config for testing."""
     return {
-        "modules": {
-            "som1": {
-                "host": "192.168.1.50",
-                "user": "root",
-                "csp_addr": 5421,
-            }
-        },
-        "appsys": {},
+        "name": "som1",
+        "transport": "ssh",
+        "host": "192.168.1.50",
+        "user": "root",
+        "csp_addr": 5421,
         "backup_dir": "/opt/satdeploy/backups",
         "max_backups": 10,
         "apps": apps,
@@ -45,7 +42,7 @@ class TestStatusCommand:
 
         result = runner.invoke(
             main,
-            ["status", "-m", "som1", "--config-dir", str(config_dir)],
+            ["status", "--config-dir", str(config_dir)],
         )
 
         assert result.exit_code != 0
@@ -58,7 +55,7 @@ class TestStatusCommand:
         config_dir = tmp_path / ".satdeploy"
         config_dir.mkdir()
         config_file = config_dir / "config.yaml"
-        config_file.write_text(yaml.dump(make_module_config({})))
+        config_file.write_text(yaml.dump(make_config({})))
 
         mock_ssh = MagicMock()
         mock_ssh_class.return_value.__enter__ = Mock(return_value=mock_ssh)
@@ -66,7 +63,7 @@ class TestStatusCommand:
 
         result = runner.invoke(
             main,
-            ["status", "-m", "som1", "--config-dir", str(config_dir)],
+            ["status", "--config-dir", str(config_dir)],
         )
 
         assert result.exit_code == 0
@@ -81,7 +78,7 @@ class TestStatusCommand:
         config_file = config_dir / "config.yaml"
         config_file.write_text(
             yaml.dump(
-                make_module_config({
+                make_config({
                     "controller": {
                         "local": "./build/controller",
                         "remote": "/opt/disco/bin/controller",
@@ -103,7 +100,7 @@ class TestStatusCommand:
 
         result = runner.invoke(
             main,
-            ["status", "-m", "som1", "--config-dir", str(config_dir)],
+            ["status", "--config-dir", str(config_dir)],
         )
 
         assert result.exit_code == 0
@@ -119,7 +116,7 @@ class TestStatusCommand:
         config_file = config_dir / "config.yaml"
         config_file.write_text(
             yaml.dump(
-                make_module_config({
+                make_config({
                     "controller": {
                         "local": "./build/controller",
                         "remote": "/opt/disco/bin/controller",
@@ -136,7 +133,7 @@ class TestStatusCommand:
 
         result = runner.invoke(
             main,
-            ["status", "-m", "som1", "--config-dir", str(config_dir)],
+            ["status", "--config-dir", str(config_dir)],
         )
 
         assert result.exit_code == 0
@@ -151,7 +148,7 @@ class TestStatusCommand:
         config_file = config_dir / "config.yaml"
         config_file.write_text(
             yaml.dump(
-                make_module_config({
+                make_config({
                     "controller": {
                         "local": "./build/controller",
                         "remote": "/opt/disco/bin/controller",
@@ -168,7 +165,7 @@ class TestStatusCommand:
 
         result = runner.invoke(
             main,
-            ["status", "-m", "som1", "--config-dir", str(config_dir)],
+            ["status", "--config-dir", str(config_dir)],
         )
 
         assert result.exit_code == 0
@@ -183,7 +180,7 @@ class TestStatusCommand:
         config_file = config_dir / "config.yaml"
         config_file.write_text(
             yaml.dump(
-                make_module_config({
+                make_config({
                     "libparam": {
                         "local": "./build/libparam.so",
                         "remote": "/usr/lib/libparam.so",
@@ -200,7 +197,7 @@ class TestStatusCommand:
 
         result = runner.invoke(
             main,
-            ["status", "-m", "som1", "--config-dir", str(config_dir)],
+            ["status", "--config-dir", str(config_dir)],
         )
 
         assert result.exit_code == 0
@@ -213,7 +210,7 @@ class TestStatusCommand:
         config_dir = tmp_path / ".satdeploy"
         config_dir.mkdir()
         config_file = config_dir / "config.yaml"
-        config_file.write_text(yaml.dump(make_module_config({})))
+        config_file.write_text(yaml.dump(make_config({})))
 
         mock_ssh = MagicMock()
         mock_ssh_class.return_value.__enter__ = Mock(return_value=mock_ssh)
@@ -221,7 +218,7 @@ class TestStatusCommand:
 
         result = runner.invoke(
             main,
-            ["status", "-m", "som1", "--config-dir", str(config_dir)],
+            ["status", "--config-dir", str(config_dir)],
         )
 
         assert result.exit_code == 0
@@ -240,7 +237,7 @@ class TestStatusPolishedOutput:
         config_file = config_dir / "config.yaml"
         config_file.write_text(
             yaml.dump(
-                make_module_config({
+                make_config({
                     "controller": {
                         "local": "./build/controller",
                         "remote": "/opt/disco/bin/controller",
@@ -257,7 +254,7 @@ class TestStatusPolishedOutput:
 
         result = runner.invoke(
             main,
-            ["status", "-m", "som1", "--config-dir", str(config_dir)],
+            ["status", "--config-dir", str(config_dir)],
             color=True,
         )
 
@@ -273,7 +270,7 @@ class TestStatusPolishedOutput:
         config_file = config_dir / "config.yaml"
         config_file.write_text(
             yaml.dump(
-                make_module_config({
+                make_config({
                     "controller": {
                         "local": "./build/controller",
                         "remote": "/opt/disco/bin/controller",
@@ -290,7 +287,7 @@ class TestStatusPolishedOutput:
 
         result = runner.invoke(
             main,
-            ["status", "-m", "som1", "--config-dir", str(config_dir)],
+            ["status", "--config-dir", str(config_dir)],
             color=True,
         )
 
@@ -306,7 +303,7 @@ class TestStatusPolishedOutput:
         config_file = config_dir / "config.yaml"
         config_file.write_text(
             yaml.dump(
-                make_module_config({
+                make_config({
                     "libparam": {
                         "local": "./build/libparam.so",
                         "remote": "/usr/lib/libparam.so",
@@ -323,7 +320,7 @@ class TestStatusPolishedOutput:
 
         result = runner.invoke(
             main,
-            ["status", "-m", "som1", "--config-dir", str(config_dir)],
+            ["status", "--config-dir", str(config_dir)],
             color=True,
         )
 
@@ -341,7 +338,7 @@ class TestStatusPolishedOutput:
         config_file = config_dir / "config.yaml"
         config_file.write_text(
             yaml.dump(
-                make_module_config({
+                make_config({
                     "controller": {
                         "local": "./build/controller",
                         "remote": "/opt/disco/bin/controller",
@@ -371,7 +368,7 @@ class TestStatusPolishedOutput:
 
         result = runner.invoke(
             main,
-            ["status", "-m", "som1", "--config-dir", str(config_dir)],
+            ["status", "--config-dir", str(config_dir)],
             color=True,
         )
 

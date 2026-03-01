@@ -29,7 +29,7 @@ class TestInitCommand:
         result = runner.invoke(
             main,
             ["init", "--config-dir", str(config_dir)],
-            input="\n\n192.168.1.50\nroot\n\n",  # module, transport(ssh), host, user, no more
+            input="\n\n192.168.1.50\nroot\n",  # name(default), transport(ssh), host, user
         )
 
         assert result.exit_code == 0
@@ -43,7 +43,7 @@ class TestInitCommand:
         result = runner.invoke(
             main,
             ["init", "--config-dir", str(config_dir)],
-            input="\n\n192.168.1.50\nroot\n\n",  # module, transport(ssh), host, user, no more
+            input="\n\n192.168.1.50\nroot\n",  # name(default), transport(ssh), host, user
         )
 
         assert "host" in result.output.lower() or "Target host" in result.output
@@ -56,7 +56,7 @@ class TestInitCommand:
         result = runner.invoke(
             main,
             ["init", "--config-dir", str(config_dir)],
-            input="\n\n192.168.1.50\nroot\n\n",  # module, transport(ssh), host, user, no more
+            input="\n\n192.168.1.50\nroot\n",  # name(default), transport(ssh), host, user
         )
 
         assert "user" in result.output.lower()
@@ -69,35 +69,16 @@ class TestInitCommand:
         runner.invoke(
             main,
             ["init", "--config-dir", str(config_dir)],
-            input="som1\n\n10.0.0.100\nadmin\n\n",  # module, transport(ssh), host, user, no more
+            input="som1\n\n10.0.0.100\nadmin\n",  # name, transport(ssh), host, user
         )
 
         config_file = config_dir / "config.yaml"
         config = yaml.safe_load(config_file.read_text())
 
-        assert config["modules"]["som1"]["host"] == "10.0.0.100"
-        assert config["modules"]["som1"]["user"] == "admin"
-        assert config["modules"]["som1"]["transport"] == "ssh"
-
-    def test_init_saves_multiple_modules(self, tmp_path):
-        """Init should save multiple modules when user adds more."""
-        runner = CliRunner()
-        config_dir = tmp_path / ".satdeploy"
-
-        runner.invoke(
-            main,
-            ["init", "--config-dir", str(config_dir)],
-            # som1, transport, host, user, yes add more, som2, transport, host, user, no more
-            input="som1\n\n10.0.0.100\nroot\ny\nsom2\n\n10.0.0.101\nroot\n\n",
-        )
-
-        config_file = config_dir / "config.yaml"
-        config = yaml.safe_load(config_file.read_text())
-
-        assert "som1" in config["modules"]
-        assert "som2" in config["modules"]
-        assert config["modules"]["som1"]["host"] == "10.0.0.100"
-        assert config["modules"]["som2"]["host"] == "10.0.0.101"
+        assert config["name"] == "som1"
+        assert config["host"] == "10.0.0.100"
+        assert config["user"] == "admin"
+        assert config["transport"] == "ssh"
 
     def test_init_sets_defaults(self, tmp_path):
         """Init should set default values for backup_dir and max_backups."""
@@ -107,7 +88,7 @@ class TestInitCommand:
         runner.invoke(
             main,
             ["init", "--config-dir", str(config_dir)],
-            input="\n\n192.168.1.50\nroot\n\n",  # module, transport(ssh), host, user, no more
+            input="\n\n192.168.1.50\nroot\n",  # name(default), transport(ssh), host, user
         )
 
         config_file = config_dir / "config.yaml"
@@ -126,25 +107,26 @@ class TestInitCommand:
         runner.invoke(
             main,
             ["init", "--config-dir", str(config_dir)],
-            # module, csp, zmq_endpoint, agent_node, ground_node, appsys_node, no more
-            input="sat1\ncsp\ntcp://localhost:4040\n5424\n4040\n10\n\n",
+            # name, csp, zmq_endpoint, agent_node, ground_node, appsys_node
+            input="sat1\ncsp\ntcp://localhost:4040\n5424\n4040\n10\n",
         )
 
         config_file = config_dir / "config.yaml"
         config = yaml.safe_load(config_file.read_text())
 
-        assert config["modules"]["sat1"]["transport"] == "csp"
-        assert config["modules"]["sat1"]["zmq_endpoint"] == "tcp://localhost:4040"
-        assert config["modules"]["sat1"]["agent_node"] == 5424
-        assert config["modules"]["sat1"]["ground_node"] == 4040
-        assert config["modules"]["sat1"]["appsys_node"] == 10
+        assert config["name"] == "sat1"
+        assert config["transport"] == "csp"
+        assert config["zmq_endpoint"] == "tcp://localhost:4040"
+        assert config["agent_node"] == 5424
+        assert config["ground_node"] == 4040
+        assert config["appsys_node"] == 10
 
     def test_init_warns_if_config_exists(self, tmp_path):
         """Init should warn if config already exists."""
         runner = CliRunner()
         config_dir = tmp_path / ".satdeploy"
         config_dir.mkdir()
-        (config_dir / "config.yaml").write_text("target:\n  host: old\n")
+        (config_dir / "config.yaml").write_text("host: old\n")
 
         result = runner.invoke(
             main,
@@ -160,16 +142,16 @@ class TestInitCommand:
         runner = CliRunner()
         config_dir = tmp_path / ".satdeploy"
         config_dir.mkdir()
-        (config_dir / "config.yaml").write_text("modules:\n  old:\n    host: old\n    user: old\n")
+        (config_dir / "config.yaml").write_text("name: old\nhost: old\nuser: old\n")
 
         result = runner.invoke(
             main,
             ["init", "--config-dir", str(config_dir)],
-            input="y\n\n\n192.168.1.50\nroot\n\n",  # Overwrite, module, transport, host, user, no more
+            input="y\n\n\n192.168.1.50\nroot\n",  # Overwrite, name(default), transport(ssh), host, user
         )
 
         config = yaml.safe_load((config_dir / "config.yaml").read_text())
-        assert config["modules"]["default"]["host"] == "192.168.1.50"
+        assert config["host"] == "192.168.1.50"
 
 
 class TestInitPolishedOutput:
@@ -183,7 +165,7 @@ class TestInitPolishedOutput:
         result = runner.invoke(
             main,
             ["init", "--config-dir", str(config_dir)],
-            input="\n\n192.168.1.50\nroot\n\n",  # module, transport, host, user, no more
+            input="\n\n192.168.1.50\nroot\n",  # name(default), transport(ssh), host, user
             color=True,
         )
 

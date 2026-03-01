@@ -21,12 +21,11 @@ class TestLogsCommand:
         config_dir.mkdir()
         config_file = config_dir / "config.yaml"
         config_file.write_text("""
-modules:
-  som1:
-    host: 192.168.1.50
-    user: root
-    csp_addr: 5421
-appsys: {}
+name: som1
+transport: ssh
+host: 192.168.1.50
+user: root
+csp_addr: 5421
 backup_dir: /opt/satdeploy/backups
 max_backups: 10
 apps:
@@ -56,19 +55,19 @@ apps:
     def test_logs_fails_without_config(self, runner, tmp_path):
         """Logs command fails if no config exists."""
         config_dir = tmp_path / ".satdeploy"
-        result = runner.invoke(main, ["logs", "controller", "-m", "som1", "--config-dir", str(config_dir)])
+        result = runner.invoke(main, ["logs", "controller", "--config-dir", str(config_dir)])
         assert result.exit_code != 0
         assert "config" in result.output.lower() or "not found" in result.output.lower()
 
     def test_logs_fails_for_unknown_app(self, runner, config_with_app):
         """Logs command fails for unknown app."""
-        result = runner.invoke(main, ["logs", "unknown", "-m", "som1", "--config-dir", str(config_with_app)])
+        result = runner.invoke(main, ["logs", "unknown", "--config-dir", str(config_with_app)])
         assert result.exit_code != 0
         assert "unknown" in result.output.lower() or "not found" in result.output.lower()
 
     def test_logs_fails_for_app_without_service(self, runner, config_with_app, mocker):
         """Logs command fails for apps without a service (libraries)."""
-        result = runner.invoke(main, ["logs", "libparam", "-m", "som1", "--config-dir", str(config_with_app)])
+        result = runner.invoke(main, ["logs", "libparam", "--config-dir", str(config_with_app)])
         assert result.exit_code != 0
         assert "service" in result.output.lower() or "library" in result.output.lower()
 
@@ -81,7 +80,7 @@ apps:
 
         mocker.patch("satdeploy.cli.SSHClient", return_value=mock_ssh)
 
-        result = runner.invoke(main, ["logs", "controller", "-m", "som1", "--config-dir", str(config_with_app)])
+        result = runner.invoke(main, ["logs", "controller", "--config-dir", str(config_with_app)])
         assert result.exit_code == 0
         assert "Starting up" in result.output
         assert "Ready" in result.output
@@ -95,7 +94,7 @@ apps:
 
         mocker.patch("satdeploy.cli.SSHClient", return_value=mock_ssh)
 
-        result = runner.invoke(main, ["logs", "controller", "-m", "som1", "--lines", "50", "--config-dir", str(config_with_app)])
+        result = runner.invoke(main, ["logs", "controller", "--lines", "50", "--config-dir", str(config_with_app)])
         assert result.exit_code == 0
         # Verify journalctl was called with correct number of lines
         mock_ssh.run.assert_called()
@@ -111,7 +110,7 @@ apps:
 
         mocker.patch("satdeploy.cli.SSHClient", return_value=mock_ssh)
 
-        result = runner.invoke(main, ["logs", "controller", "-m", "som1", "--config-dir", str(config_with_app)])
+        result = runner.invoke(main, ["logs", "controller", "--config-dir", str(config_with_app)])
         assert result.exit_code == 0
         # Verify journalctl was called with 100 lines
         mock_ssh.run.assert_called()
@@ -133,12 +132,11 @@ class TestLogsPolishedOutput:
         config_dir.mkdir()
         config_file = config_dir / "config.yaml"
         config_file.write_text("""
-modules:
-  som1:
-    host: 192.168.1.50
-    user: root
-    csp_addr: 5421
-appsys: {}
+name: som1
+transport: ssh
+host: 192.168.1.50
+user: root
+csp_addr: 5421
 backup_dir: /opt/satdeploy/backups
 max_backups: 10
 apps:
@@ -160,7 +158,7 @@ apps:
 
         result = runner.invoke(
             main,
-            ["logs", "controller", "-m", "som1", "--config-dir", str(config_with_app)],
+            ["logs", "controller", "--config-dir", str(config_with_app)],
             color=True,
         )
 

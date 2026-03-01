@@ -11,17 +11,14 @@ from satdeploy.cli import main
 from satdeploy.output import SYMBOLS
 
 
-def make_module_config(apps: dict) -> dict:
-    """Create a module-based config for testing."""
+def make_config(apps: dict) -> dict:
+    """Create a flat config for testing."""
     return {
-        "modules": {
-            "som1": {
-                "host": "192.168.1.50",
-                "user": "root",
-                "csp_addr": 5421,
-            }
-        },
-        "appsys": {},
+        "name": "som1",
+        "transport": "ssh",
+        "host": "192.168.1.50",
+        "user": "root",
+        "csp_addr": 5421,
         "backup_dir": "/opt/satdeploy/backups",
         "max_backups": 10,
         "apps": apps,
@@ -52,7 +49,7 @@ class TestListCommand:
 
         result = runner.invoke(
             main,
-            ["list", "controller", "-m", "som1", "--config-dir", str(config_dir)],
+            ["list", "controller", "--config-dir", str(config_dir)],
         )
 
         assert result.exit_code != 0
@@ -64,11 +61,11 @@ class TestListCommand:
         config_dir = tmp_path / ".satdeploy"
         config_dir.mkdir()
         config_file = config_dir / "config.yaml"
-        config_file.write_text(yaml.dump(make_module_config({})))
+        config_file.write_text(yaml.dump(make_config({})))
 
         result = runner.invoke(
             main,
-            ["list", "unknown_app", "-m", "som1", "--config-dir", str(config_dir)],
+            ["list", "unknown_app", "--config-dir", str(config_dir)],
         )
 
         assert result.exit_code != 0
@@ -83,7 +80,7 @@ class TestListCommand:
         config_file = config_dir / "config.yaml"
         config_file.write_text(
             yaml.dump(
-                make_module_config({
+                make_config({
                     "controller": {
                         "local": "./build/controller",
                         "remote": "/opt/disco/bin/controller",
@@ -103,7 +100,7 @@ class TestListCommand:
 
         result = runner.invoke(
             main,
-            ["list", "controller", "-m", "som1", "--config-dir", str(config_dir)],
+            ["list", "controller", "--config-dir", str(config_dir)],
         )
 
         assert result.exit_code == 0
@@ -120,7 +117,7 @@ class TestListCommand:
         config_file = config_dir / "config.yaml"
         config_file.write_text(
             yaml.dump(
-                make_module_config({
+                make_config({
                     "controller": {
                         "local": "./build/controller",
                         "remote": "/opt/disco/bin/controller",
@@ -140,7 +137,7 @@ class TestListCommand:
 
         result = runner.invoke(
             main,
-            ["list", "controller", "-m", "som1", "--config-dir", str(config_dir)],
+            ["list", "controller", "--config-dir", str(config_dir)],
         )
 
         assert result.exit_code == 0
@@ -156,7 +153,7 @@ class TestListCommand:
         config_file = config_dir / "config.yaml"
         config_file.write_text(
             yaml.dump(
-                make_module_config({
+                make_config({
                     "controller": {
                         "local": "./build/controller",
                         "remote": "/opt/disco/bin/controller",
@@ -173,7 +170,7 @@ class TestListCommand:
 
         result = runner.invoke(
             main,
-            ["list", "controller", "-m", "som1", "--config-dir", str(config_dir)],
+            ["list", "controller", "--config-dir", str(config_dir)],
         )
 
         assert result.exit_code == 0
@@ -192,7 +189,7 @@ class TestListPolishedOutput:
         config_file = config_dir / "config.yaml"
         config_file.write_text(
             yaml.dump(
-                make_module_config({
+                make_config({
                     "controller": {
                         "local": "./build/controller",
                         "remote": "/opt/disco/bin/controller",
@@ -212,7 +209,7 @@ class TestListPolishedOutput:
 
         result = runner.invoke(
             main,
-            ["list", "controller", "-m", "som1", "--config-dir", str(config_dir)],
+            ["list", "controller", "--config-dir", str(config_dir)],
             color=True,
         )
 
@@ -228,7 +225,7 @@ class TestListPolishedOutput:
         config_file = config_dir / "config.yaml"
         config_file.write_text(
             yaml.dump(
-                make_module_config({
+                make_config({
                     "controller": {
                         "local": "./build/controller",
                         "remote": "/opt/disco/bin/controller",
@@ -248,7 +245,7 @@ class TestListPolishedOutput:
 
         result = runner.invoke(
             main,
-            ["list", "controller", "-m", "som1", "--config-dir", str(config_dir)],
+            ["list", "controller", "--config-dir", str(config_dir)],
             color=True,
         )
 
@@ -268,7 +265,7 @@ class TestListPolishedOutput:
         config_file = config_dir / "config.yaml"
         config_file.write_text(
             yaml.dump(
-                make_module_config({
+                make_config({
                     "controller": {
                         "local": "./build/controller",
                         "remote": "/opt/disco/bin/controller",
@@ -302,7 +299,7 @@ class TestListPolishedOutput:
 
         result = runner.invoke(
             main,
-            ["list", "controller", "-m", "som1", "--config-dir", str(config_dir)],
+            ["list", "controller", "--config-dir", str(config_dir)],
             color=True,
         )
 
@@ -321,7 +318,7 @@ class TestListPolishedOutput:
         config_file = config_dir / "config.yaml"
         config_file.write_text(
             yaml.dump(
-                make_module_config({
+                make_config({
                     "controller": {
                         "local": "./build/controller",
                         "remote": "/opt/disco/bin/controller",
@@ -354,7 +351,7 @@ class TestListPolishedOutput:
 
         result = runner.invoke(
             main,
-            ["list", "controller", "-m", "som1", "--config-dir", str(config_dir)],
+            ["list", "controller", "--config-dir", str(config_dir)],
         )
 
         assert result.exit_code == 0

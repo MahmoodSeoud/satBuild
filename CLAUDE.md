@@ -63,7 +63,7 @@ Both implement the same interface: `deploy()`, `rollback()`, `get_status()`, `li
 | Module | Purpose |
 |--------|---------|
 | `cli.py` | Click command handlers, main orchestration |
-| `config.py` | YAML config loading, multi-module support |
+| `config.py` | YAML config loading, per-target flat format |
 | `transport/base.py` | Abstract transport interface |
 | `transport/ssh.py` | SSH/SFTP implementation |
 | `transport/csp.py` | CSP/DTP implementation |
@@ -102,7 +102,6 @@ Ground station csh module providing:
 ## CLI Commands
 
 ```bash
-# Core commands
 satdeploy init                      # Interactive setup
 satdeploy push <app>                # Deploy binary
 satdeploy push <app> --local ./path # Deploy with path override
@@ -114,29 +113,21 @@ satdeploy rollback <app> <hash>     # Restore specific version
 satdeploy logs <app>                # Show service logs
 satdeploy config                    # Show current config
 
-# Fleet commands (multi-module)
-satdeploy fleet status              # Status across all modules
-satdeploy diff <module1> <module2>  # Compare app versions
-satdeploy sync <source> <target>    # Sync target to match source
+# Switch targets with --config-dir
+satdeploy status --config-dir ~/.satdeploy/som2
 ```
 
 ## Config Structure
 
-Config lives at `~/.satdeploy/config.yaml`:
+Each target gets its own config directory (e.g. `~/.satdeploy/som1/config.yaml`):
 
 ```yaml
-modules:
-  default:                    # SSH transport
-    transport: ssh
-    host: 192.168.1.50
-    user: root
-
-  satellite1:                 # CSP transport
-    transport: csp
-    zmq_endpoint: tcp://localhost:4040
-    agent_node: 5424
-    ground_node: 4040
-    appsys_node: 10
+name: som1
+transport: csp
+zmq_endpoint: tcp://localhost:4040
+agent_node: 5424
+ground_node: 4040
+appsys_node: 10
 
 backup_dir: /opt/satdeploy/backups
 max_backups: 10
@@ -155,6 +146,8 @@ apps:
     service: null
     restart: [csp_server, controller]
 ```
+
+The `name` field identifies this target in history records (defaults to `"default"`).
 
 ## Deployment Flow
 

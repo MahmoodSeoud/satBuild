@@ -11,7 +11,7 @@ satdeploy fixes this with:
 - **Dependency ordering** - Services stop/start in the right order
 - **One-command rollback** - Instantly restore any previous version
 - **Multi-transport** - Works over SSH or CSP (satellite links)
-- **Fleet management** - Deploy across multiple targets
+- **Per-target configs** - Separate config dirs per target, switch with `--config-dir`
 
 ## Components
 
@@ -63,29 +63,19 @@ satdeploy list controller
 | `satdeploy logs <app>` | Show service logs |
 | `satdeploy config` | Show configuration |
 
-### Fleet Commands
-
-| Command | Description |
-|---------|-------------|
-| `satdeploy fleet status` | Status across all modules |
-| `satdeploy diff <m1> <m2>` | Compare versions between modules |
-| `satdeploy sync <src> <dst>` | Sync target to match source |
+All commands accept `--config-dir` to select which target config to use (e.g. `--config-dir ~/.satdeploy/som2`).
 
 ## Configuration
 
-Config lives at `~/.satdeploy/config.yaml`:
+Each target gets its own config directory (e.g. `~/.satdeploy/som1/config.yaml`):
 
 ```yaml
-modules:
-  default:
-    transport: ssh
-    host: 192.168.1.50
-    user: root
-
-  satellite1:
-    transport: csp
-    zmq_endpoint: tcp://localhost:4040
-    agent_node: 5424
+name: som1
+transport: csp
+zmq_endpoint: tcp://localhost:4040
+agent_node: 5424
+ground_node: 4040
+appsys_node: 10
 
 backup_dir: /opt/satdeploy/backups
 max_backups: 10
@@ -127,11 +117,10 @@ apps:
 Direct SSH/SFTP connection. Works with any Linux target.
 
 ```yaml
-modules:
-  flatsat:
-    transport: ssh
-    host: 192.168.1.50
-    user: root
+name: flatsat
+transport: ssh
+host: 192.168.1.50
+user: root
 ```
 
 ### CSP (Cubesat Space Protocol)
@@ -139,12 +128,11 @@ modules:
 For satellite communication links. Requires `satdeploy-agent` running on target.
 
 ```yaml
-modules:
-  satellite:
-    transport: csp
-    zmq_endpoint: tcp://localhost:4040
-    agent_node: 5424
-    ground_node: 4040
+name: satellite
+transport: csp
+zmq_endpoint: tcp://localhost:4040
+agent_node: 5424
+ground_node: 4040
 ```
 
 ## Dependency Resolution

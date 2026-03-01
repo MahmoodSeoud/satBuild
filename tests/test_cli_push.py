@@ -11,17 +11,14 @@ from satdeploy.cli import main
 from satdeploy.output import SYMBOLS
 
 
-def make_module_config(apps: dict, backup_dir: str = "/opt/satdeploy/backups") -> dict:
-    """Create a module-based config for testing."""
+def make_config(apps: dict, backup_dir: str = "/opt/satdeploy/backups") -> dict:
+    """Create a flat config for testing."""
     return {
-        "modules": {
-            "som1": {
-                "host": "192.168.1.50",
-                "user": "root",
-                "csp_addr": 5421,
-            }
-        },
-        "appsys": {},
+        "name": "som1",
+        "transport": "ssh",
+        "host": "192.168.1.50",
+        "user": "root",
+        "csp_addr": 5421,
         "backup_dir": backup_dir,
         "apps": apps,
     }
@@ -37,13 +34,6 @@ class TestPushCommand:
         assert result.exit_code == 0
         assert "app" in result.output.lower()
 
-    def test_push_requires_module(self):
-        """Push should require --module option."""
-        runner = CliRunner()
-        result = runner.invoke(main, ["push", "controller"])
-        assert result.exit_code != 0
-        assert "module" in result.output.lower()
-
     def test_push_fails_without_config(self, tmp_path):
         """Push should fail if config doesn't exist."""
         runner = CliRunner()
@@ -51,7 +41,7 @@ class TestPushCommand:
 
         result = runner.invoke(
             main,
-            ["push", "controller", "-m", "som1", "--config-dir", str(config_dir)],
+            ["push", "controller", "--config-dir", str(config_dir)],
         )
 
         assert result.exit_code != 0
@@ -63,11 +53,11 @@ class TestPushCommand:
         config_dir = tmp_path / ".satdeploy"
         config_dir.mkdir()
         config_file = config_dir / "config.yaml"
-        config_file.write_text(yaml.dump(make_module_config({})))
+        config_file.write_text(yaml.dump(make_config({})))
 
         result = runner.invoke(
             main,
-            ["push", "unknown_app", "-m", "som1", "--config-dir", str(config_dir)],
+            ["push", "unknown_app", "--config-dir", str(config_dir)],
         )
 
         assert result.exit_code != 0
@@ -81,7 +71,7 @@ class TestPushCommand:
         config_file = config_dir / "config.yaml"
         config_file.write_text(
             yaml.dump(
-                make_module_config({
+                make_config({
                     "controller": {
                         "local": "/nonexistent/path/controller",
                         "remote": "/opt/disco/bin/controller",
@@ -93,7 +83,7 @@ class TestPushCommand:
 
         result = runner.invoke(
             main,
-            ["push", "controller", "-m", "som1", "--config-dir", str(config_dir)],
+            ["push", "controller", "--config-dir", str(config_dir)],
         )
 
         assert result.exit_code != 0
@@ -101,7 +91,7 @@ class TestPushCommand:
 
     @patch("satdeploy.cli.SSHClient")
     def test_push_connects_to_target(self, mock_ssh_class, tmp_path):
-        """Push should connect to the configured module."""
+        """Push should connect to the configured target."""
         runner = CliRunner()
         config_dir = tmp_path / ".satdeploy"
         config_dir.mkdir()
@@ -112,7 +102,7 @@ class TestPushCommand:
         config_file = config_dir / "config.yaml"
         config_file.write_text(
             yaml.dump(
-                make_module_config({
+                make_config({
                     "controller": {
                         "local": str(binary),
                         "remote": "/opt/disco/bin/controller",
@@ -130,7 +120,7 @@ class TestPushCommand:
 
         result = runner.invoke(
             main,
-            ["push", "controller", "-m", "som1", "--config-dir", str(config_dir)],
+            ["push", "controller", "--config-dir", str(config_dir)],
         )
 
         mock_ssh_class.assert_called_once_with(host="192.168.1.50", user="root")
@@ -148,7 +138,7 @@ class TestPushCommand:
         config_file = config_dir / "config.yaml"
         config_file.write_text(
             yaml.dump(
-                make_module_config({
+                make_config({
                     "controller": {
                         "local": str(binary),
                         "remote": "/opt/disco/bin/controller",
@@ -166,7 +156,7 @@ class TestPushCommand:
 
         result = runner.invoke(
             main,
-            ["push", "controller", "-m", "som1", "--config-dir", str(config_dir)],
+            ["push", "controller", "--config-dir", str(config_dir)],
         )
 
         assert result.exit_code == 0
@@ -185,7 +175,7 @@ class TestPushCommand:
         config_file = config_dir / "config.yaml"
         config_file.write_text(
             yaml.dump(
-                make_module_config({
+                make_config({
                     "controller": {
                         "local": "/default/path/controller",
                         "remote": "/opt/disco/bin/controller",
@@ -206,7 +196,6 @@ class TestPushCommand:
             [
                 "push",
                 "controller",
-                "-m", "som1",
                 "--local",
                 str(binary),
                 "--config-dir",
@@ -238,7 +227,7 @@ class TestPushCommand:
         config_file = config_dir / "config.yaml"
         config_file.write_text(
             yaml.dump(
-                make_module_config({
+                make_config({
                     "controller": {
                         "local": "~/build/controller",  # Uses tilde
                         "remote": "/opt/disco/bin/controller",
@@ -256,7 +245,7 @@ class TestPushCommand:
 
         result = runner.invoke(
             main,
-            ["push", "controller", "-m", "som1", "--config-dir", str(config_dir)],
+            ["push", "controller", "--config-dir", str(config_dir)],
         )
 
         assert result.exit_code == 0, f"Failed with: {result.output}"
@@ -281,7 +270,7 @@ class TestPushWithDependencies:
         config_file = config_dir / "config.yaml"
         config_file.write_text(
             yaml.dump(
-                make_module_config({
+                make_config({
                     "controller": {
                         "local": "./build/controller",
                         "remote": "/opt/disco/bin/controller",
@@ -305,7 +294,7 @@ class TestPushWithDependencies:
 
         result = runner.invoke(
             main,
-            ["push", "csp_server", "-m", "som1", "--config-dir", str(config_dir)],
+            ["push", "csp_server", "--config-dir", str(config_dir)],
         )
 
         assert result.exit_code == 0
@@ -325,7 +314,7 @@ class TestPushWithDependencies:
         config_file = config_dir / "config.yaml"
         config_file.write_text(
             yaml.dump(
-                make_module_config({
+                make_config({
                     "controller": {
                         "local": "./build/controller",
                         "remote": "/opt/disco/bin/controller",
@@ -349,7 +338,7 @@ class TestPushWithDependencies:
 
         result = runner.invoke(
             main,
-            ["push", "csp_server", "-m", "som1", "--config-dir", str(config_dir)],
+            ["push", "csp_server", "--config-dir", str(config_dir)],
         )
 
         assert result.exit_code == 0
@@ -381,7 +370,7 @@ class TestPushWithDependencies:
         config_file = config_dir / "config.yaml"
         config_file.write_text(
             yaml.dump(
-                make_module_config({
+                make_config({
                     "libparam": {
                         "local": str(lib),
                         "remote": "/usr/lib/libparam.so",
@@ -410,7 +399,7 @@ class TestPushWithDependencies:
 
         result = runner.invoke(
             main,
-            ["push", "libparam", "-m", "som1", "--config-dir", str(config_dir)],
+            ["push", "libparam", "--config-dir", str(config_dir)],
         )
 
         assert result.exit_code == 0
@@ -434,7 +423,7 @@ class TestPushWithDependencies:
         config_file = config_dir / "config.yaml"
         config_file.write_text(
             yaml.dump(
-                make_module_config({
+                make_config({
                     "controller": {
                         "local": str(binary),
                         "remote": "/opt/disco/bin/controller",
@@ -453,7 +442,7 @@ class TestPushWithDependencies:
 
         result = runner.invoke(
             main,
-            ["push", "controller", "-m", "som1", "--config-dir", str(config_dir)],
+            ["push", "controller", "--config-dir", str(config_dir)],
         )
 
         # Should fail with clean error, not traceback
@@ -480,7 +469,7 @@ class TestPushHistoryLogging:
         config_file = config_dir / "config.yaml"
         config_file.write_text(
             yaml.dump(
-                make_module_config({
+                make_config({
                     "controller": {
                         "local": str(binary),
                         "remote": "/opt/disco/bin/controller",
@@ -498,7 +487,7 @@ class TestPushHistoryLogging:
 
         result = runner.invoke(
             main,
-            ["push", "controller", "-m", "som1", "--config-dir", str(config_dir)],
+            ["push", "controller", "--config-dir", str(config_dir)],
         )
 
         assert result.exit_code == 0
@@ -528,7 +517,7 @@ class TestPushHistoryLogging:
         config_file = config_dir / "config.yaml"
         config_file.write_text(
             yaml.dump(
-                make_module_config({
+                make_config({
                     "controller": {
                         "local": str(binary),
                         "remote": "/opt/disco/bin/controller",
@@ -546,7 +535,7 @@ class TestPushHistoryLogging:
 
         result = runner.invoke(
             main,
-            ["push", "controller", "-m", "som1", "--config-dir", str(config_dir)],
+            ["push", "controller", "--config-dir", str(config_dir)],
         )
 
         assert result.exit_code == 0
@@ -572,7 +561,7 @@ class TestPushHistoryLogging:
         config_file = config_dir / "config.yaml"
         config_file.write_text(
             yaml.dump(
-                make_module_config({
+                make_config({
                     "controller": {
                         "local": str(binary),
                         "remote": "/opt/disco/bin/controller",
@@ -590,7 +579,7 @@ class TestPushHistoryLogging:
 
         result = runner.invoke(
             main,
-            ["push", "controller", "-m", "som1", "--config-dir", str(config_dir)],
+            ["push", "controller", "--config-dir", str(config_dir)],
         )
 
         assert result.exit_code != 0
@@ -618,7 +607,7 @@ class TestPushPolishedOutput:
         config_file = config_dir / "config.yaml"
         config_file.write_text(
             yaml.dump(
-                make_module_config({
+                make_config({
                     "controller": {
                         "local": str(binary),
                         "remote": "/opt/disco/bin/controller",
@@ -636,7 +625,7 @@ class TestPushPolishedOutput:
 
         result = runner.invoke(
             main,
-            ["push", "controller", "-m", "som1", "--config-dir", str(config_dir)],
+            ["push", "controller", "--config-dir", str(config_dir)],
             color=True,
         )
 
@@ -658,7 +647,7 @@ class TestPushPolishedOutput:
         config_file = config_dir / "config.yaml"
         config_file.write_text(
             yaml.dump(
-                make_module_config({
+                make_config({
                     "controller": {
                         "local": str(binary),
                         "remote": "/opt/disco/bin/controller",
@@ -676,7 +665,7 @@ class TestPushPolishedOutput:
 
         result = runner.invoke(
             main,
-            ["push", "controller", "-m", "som1", "--config-dir", str(config_dir)],
+            ["push", "controller", "--config-dir", str(config_dir)],
             color=True,
         )
 
@@ -696,7 +685,7 @@ class TestPushPolishedOutput:
         config_file = config_dir / "config.yaml"
         config_file.write_text(
             yaml.dump(
-                make_module_config({
+                make_config({
                     "controller": {
                         "local": str(binary),
                         "remote": "/opt/disco/bin/controller",
@@ -714,7 +703,7 @@ class TestPushPolishedOutput:
 
         result = runner.invoke(
             main,
-            ["push", "controller", "-m", "som1", "--config-dir", str(config_dir)],
+            ["push", "controller", "--config-dir", str(config_dir)],
             color=True,
         )
 

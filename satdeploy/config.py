@@ -64,7 +64,18 @@ DEFAULT_CONFIG_DIR = Path.home() / ".satdeploy"
 
 
 class Config:
-    """Handles loading, saving, and validating satdeploy configuration."""
+    """Handles loading, saving, and validating satdeploy configuration.
+
+    Expects a flat config format with target settings at the top level:
+
+        name: som1
+        transport: csp
+        zmq_endpoint: tcp://localhost:4040
+        agent_node: 5425
+        ...
+        apps:
+          dipp: ...
+    """
 
     def __init__(self, config_dir: Optional[Path] = None):
         self._config_dir = config_dir or DEFAULT_CONFIG_DIR
@@ -105,7 +116,7 @@ class Config:
         self._data = data
 
     def validate(self, data: dict) -> list[str]:
-        """Validate configuration data.
+        """Validate flat configuration data.
 
         Args:
             data: The configuration dictionary to validate.
@@ -115,15 +126,20 @@ class Config:
         """
         errors = []
 
-        if "target" not in data:
-            errors.append("target")
-            return errors
+        transport = data.get("transport", "ssh")
 
-        target = data["target"]
-        if "host" not in target:
-            errors.append("target.host")
-        if "user" not in target:
-            errors.append("target.user")
+        if transport == "ssh":
+            if "host" not in data:
+                errors.append("host")
+            if "user" not in data:
+                errors.append("user")
+        elif transport == "csp":
+            if "zmq_endpoint" not in data:
+                errors.append("zmq_endpoint")
+            if "agent_node" not in data:
+                errors.append("agent_node")
+        else:
+            errors.append(f"unknown transport: {transport}")
 
         apps = data.get("apps", {})
         for app_name, app_config in apps.items():
@@ -133,6 +149,70 @@ class Config:
                 errors.append(f"apps.{app_name}.remote")
 
         return errors
+
+    @property
+    def module_name(self) -> str:
+        """Get the target name from config (defaults to 'default')."""
+        if self._data is None:
+            return "default"
+        return self._data.get("name", "default")
+
+    def get_target(self) -> ModuleConfig:
+        """Build a ModuleConfig from top-level flat config fields.
+
+        Returns:
+            ModuleConfig with settings from the flat config.
+        """
+        if self._data is None:
+            raise RuntimeError("Config not loaded")
+
+        name = self._data.get("name", "default")
+        transport = self._data.get("transport", "ssh")
+        appsys = self._data.get("appsys", {})
+
+        return ModuleConfig(
+            name=name,
+            transport=transport,
+            # SSH fields
+            host=self._data.get("host"),
+            user=self._data.get("user"),
+            # CSP fields
+            zmq_endpoint=self._data.get("zmq_endpoint"),
+            agent_node=self._data.get("agent_node"),
+            appsys_node=self._data.get("appsys_node"),
+            ground_node=self._data.get("ground_node", 4040),
+            # Common fields
+            csp_addr=self._data.get("csp_addr", 0),
+            netmask=appsys.get("netmask", 0),
+            interface=appsys.get("interface", 0),
+            baudrate=appsys.get("baudrate", 0),
+            vmem_path=appsys.get("vmem_path", ""),
+            # Per-app node addresses
+            app_nodes=self._data.get("app_nodes"),
+        )
+
+    def get_modules(self) -> dict[str, ModuleConfig]:
+        """Get all configured modules.
+
+        For flat config, returns a single-entry dict keyed by module_name.
+
+        Returns:
+            Dictionary mapping module name to ModuleConfig.
+        """
+        if self._data is None:
+            return {}
+
+        return {self.module_name: self.get_target()}
+
+    def get_module(self, name: str) -> ModuleConfig:
+        """Get target module configuration.
+
+        Transitional: ignores name parameter, returns the single target.
+
+        Returns:
+            ModuleConfig with target settings.
+        """
+        return self.get_target()
 
     def get_app(self, name: str) -> Optional[AppConfig]:
         """Get configuration for a specific app.
@@ -162,13 +242,6 @@ class Config:
         )
 
     @property
-    def target(self) -> Optional[dict]:
-        """Get target configuration."""
-        if self._data is None:
-            return None
-        return self._data.get("target")
-
-    @property
     def apps(self) -> dict:
         """Get all app configurations."""
         if self._data is None:
@@ -188,62 +261,6 @@ class Config:
         if self._data is None:
             return 10
         return self._data.get("max_backups", 10)
-
-    def get_modules(self) -> dict[str, ModuleConfig]:
-        """Get all configured modules.
-
-        Returns:
-            Dictionary mapping module names to ModuleConfig objects.
-        """
-        if self._data is None:
-            return {}
-
-        modules_data = self._data.get("modules", {})
-        appsys = self._data.get("appsys", {})
-
-        result = {}
-        for name, mod in modules_data.items():
-            # Determine transport type (defaults to "ssh")
-            transport = mod.get("transport", "ssh")
-
-            result[name] = ModuleConfig(
-                name=name,
-                transport=transport,
-                # SSH fields
-                host=mod.get("host"),
-                user=mod.get("user"),
-                # CSP fields
-                zmq_endpoint=mod.get("zmq_endpoint"),
-                agent_node=mod.get("agent_node"),
-                appsys_node=mod.get("appsys_node"),
-                ground_node=mod.get("ground_node", 4040),
-                # Common fields
-                csp_addr=mod.get("csp_addr", 0),
-                netmask=appsys.get("netmask", 0),
-                interface=appsys.get("interface", 0),
-                baudrate=appsys.get("baudrate", 0),
-                vmem_path=appsys.get("vmem_path", ""),
-                # Per-app node addresses
-                app_nodes=mod.get("app_nodes"),
-            )
-        return result
-
-    def get_module(self, name: str) -> ModuleConfig:
-        """Get configuration for a specific module.
-
-        Args:
-            name: The module name.
-
-        Returns:
-            ModuleConfig with module and inherited appsys settings.
-
-        Raises:
-            KeyError: If module name is not found.
-        """
-        modules = self.get_modules()
-        if name not in modules:
-            raise KeyError(f"Module '{name}' not found")
-        return modules[name]
 
     def get_all_app_names(self) -> list[str]:
         """Get names of all configured apps.

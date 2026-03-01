@@ -11,17 +11,14 @@ from satdeploy.cli import main
 from satdeploy.output import SYMBOLS
 
 
-def make_module_config(apps: dict) -> dict:
-    """Create a module-based config for testing."""
+def make_config(apps: dict) -> dict:
+    """Create a flat config for testing."""
     return {
-        "modules": {
-            "som1": {
-                "host": "192.168.1.50",
-                "user": "root",
-                "csp_addr": 5421,
-            }
-        },
-        "appsys": {},
+        "name": "som1",
+        "transport": "ssh",
+        "host": "192.168.1.50",
+        "user": "root",
+        "csp_addr": 5421,
         "backup_dir": "/opt/satdeploy/backups",
         "max_backups": 10,
         "apps": apps,
@@ -52,7 +49,7 @@ class TestRollbackCommand:
 
         result = runner.invoke(
             main,
-            ["rollback", "controller", "-m", "som1", "--config-dir", str(config_dir)],
+            ["rollback", "controller", "--config-dir", str(config_dir)],
         )
 
         assert result.exit_code != 0
@@ -64,11 +61,11 @@ class TestRollbackCommand:
         config_dir = tmp_path / ".satdeploy"
         config_dir.mkdir()
         config_file = config_dir / "config.yaml"
-        config_file.write_text(yaml.dump(make_module_config({})))
+        config_file.write_text(yaml.dump(make_config({})))
 
         result = runner.invoke(
             main,
-            ["rollback", "unknown_app", "-m", "som1", "--config-dir", str(config_dir)],
+            ["rollback", "unknown_app", "--config-dir", str(config_dir)],
         )
 
         assert result.exit_code != 0
@@ -83,7 +80,7 @@ class TestRollbackCommand:
         config_file = config_dir / "config.yaml"
         config_file.write_text(
             yaml.dump(
-                make_module_config({
+                make_config({
                     "controller": {
                         "local": "./build/controller",
                         "remote": "/opt/disco/bin/controller",
@@ -104,7 +101,7 @@ class TestRollbackCommand:
 
         result = runner.invoke(
             main,
-            ["rollback", "controller", "-m", "som1", "--config-dir", str(config_dir)],
+            ["rollback", "controller", "--config-dir", str(config_dir)],
         )
 
         assert result.exit_code == 0
@@ -121,7 +118,7 @@ class TestRollbackCommand:
         config_file = config_dir / "config.yaml"
         config_file.write_text(
             yaml.dump(
-                make_module_config({
+                make_config({
                     "controller": {
                         "local": "./build/controller",
                         "remote": "/opt/disco/bin/controller",
@@ -142,7 +139,7 @@ class TestRollbackCommand:
 
         result = runner.invoke(
             main,
-            ["rollback", "controller", "def67890", "-m", "som1", "--config-dir", str(config_dir)],
+            ["rollback", "controller", "def67890", "--config-dir", str(config_dir)],
         )
 
         assert result.exit_code == 0
@@ -158,7 +155,7 @@ class TestRollbackCommand:
         config_file = config_dir / "config.yaml"
         config_file.write_text(
             yaml.dump(
-                make_module_config({
+                make_config({
                     "controller": {
                         "local": "./build/controller",
                         "remote": "/opt/disco/bin/controller",
@@ -175,7 +172,7 @@ class TestRollbackCommand:
 
         result = runner.invoke(
             main,
-            ["rollback", "controller", "-m", "som1", "--config-dir", str(config_dir)],
+            ["rollback", "controller", "--config-dir", str(config_dir)],
         )
 
         assert result.exit_code != 0
@@ -190,7 +187,7 @@ class TestRollbackCommand:
         config_file = config_dir / "config.yaml"
         config_file.write_text(
             yaml.dump(
-                make_module_config({
+                make_config({
                     "controller": {
                         "local": "./build/controller",
                         "remote": "/opt/disco/bin/controller",
@@ -211,7 +208,7 @@ class TestRollbackCommand:
 
         result = runner.invoke(
             main,
-            ["rollback", "controller", "zzzzzzzz", "-m", "som1", "--config-dir", str(config_dir)],
+            ["rollback", "controller", "zzzzzzzz", "--config-dir", str(config_dir)],
         )
 
         assert result.exit_code != 0
@@ -226,7 +223,7 @@ class TestRollbackCommand:
         config_file = config_dir / "config.yaml"
         config_file.write_text(
             yaml.dump(
-                make_module_config({
+                make_config({
                     "controller": {
                         "local": "./build/controller",
                         "remote": "/opt/disco/bin/controller",
@@ -247,7 +244,7 @@ class TestRollbackCommand:
 
         result = runner.invoke(
             main,
-            ["rollback", "controller", "-m", "som1", "--config-dir", str(config_dir)],
+            ["rollback", "controller", "--config-dir", str(config_dir)],
         )
 
         assert result.exit_code == 0
@@ -266,7 +263,7 @@ class TestRollbackWithDependencies:
         config_file = config_dir / "config.yaml"
         config_file.write_text(
             yaml.dump(
-                make_module_config({
+                make_config({
                     "controller": {
                         "local": "./build/controller",
                         "remote": "/opt/disco/bin/controller",
@@ -293,7 +290,7 @@ class TestRollbackWithDependencies:
 
         result = runner.invoke(
             main,
-            ["rollback", "csp_server", "-m", "som1", "--config-dir", str(config_dir)],
+            ["rollback", "csp_server", "--config-dir", str(config_dir)],
         )
 
         assert result.exit_code == 0
@@ -315,7 +312,7 @@ class TestRollbackHistoryLogging:
         config_file = config_dir / "config.yaml"
         config_file.write_text(
             yaml.dump(
-                make_module_config({
+                make_config({
                     "controller": {
                         "local": "./build/controller",
                         "remote": "/opt/disco/bin/controller",
@@ -336,7 +333,7 @@ class TestRollbackHistoryLogging:
 
         result = runner.invoke(
             main,
-            ["rollback", "controller", "-m", "som1", "--config-dir", str(config_dir)],
+            ["rollback", "controller", "--config-dir", str(config_dir)],
         )
 
         assert result.exit_code == 0
@@ -361,7 +358,7 @@ class TestRollbackHistoryLogging:
         config_file = config_dir / "config.yaml"
         config_file.write_text(
             yaml.dump(
-                make_module_config({
+                make_config({
                     "controller": {
                         "local": "./build/controller",
                         "remote": "/opt/disco/bin/controller",
@@ -382,7 +379,7 @@ class TestRollbackHistoryLogging:
 
         result = runner.invoke(
             main,
-            ["rollback", "controller", "-m", "som1", "--config-dir", str(config_dir)],
+            ["rollback", "controller", "--config-dir", str(config_dir)],
         )
 
         assert result.exit_code == 0
@@ -402,7 +399,7 @@ class TestRollbackHistoryLogging:
         config_file = config_dir / "config.yaml"
         config_file.write_text(
             yaml.dump(
-                make_module_config({
+                make_config({
                     "controller": {
                         "local": "./build/controller",
                         "remote": "/opt/disco/bin/controller",
@@ -424,7 +421,7 @@ class TestRollbackHistoryLogging:
 
         result = runner.invoke(
             main,
-            ["rollback", "controller", "-m", "som1", "--config-dir", str(config_dir)],
+            ["rollback", "controller", "--config-dir", str(config_dir)],
         )
 
         assert result.exit_code == 0
@@ -447,7 +444,7 @@ class TestRollbackHistoryLogging:
         config_file = config_dir / "config.yaml"
         config_file.write_text(
             yaml.dump(
-                make_module_config({
+                make_config({
                     "controller": {
                         "local": "./build/controller",
                         "remote": "/opt/disco/bin/controller",
@@ -468,7 +465,7 @@ class TestRollbackHistoryLogging:
 
         result = runner.invoke(
             main,
-            ["rollback", "controller", "-m", "som1", "--config-dir", str(config_dir)],
+            ["rollback", "controller", "--config-dir", str(config_dir)],
         )
 
         assert result.exit_code != 0
@@ -492,7 +489,7 @@ class TestRollbackPolishedOutput:
         config_file = config_dir / "config.yaml"
         config_file.write_text(
             yaml.dump(
-                make_module_config({
+                make_config({
                     "controller": {
                         "local": "./build/controller",
                         "remote": "/opt/disco/bin/controller",
@@ -513,7 +510,7 @@ class TestRollbackPolishedOutput:
 
         result = runner.invoke(
             main,
-            ["rollback", "controller", "-m", "som1", "--config-dir", str(config_dir)],
+            ["rollback", "controller", "--config-dir", str(config_dir)],
             color=True,
         )
 
@@ -530,7 +527,7 @@ class TestRollbackPolishedOutput:
         config_file = config_dir / "config.yaml"
         config_file.write_text(
             yaml.dump(
-                make_module_config({
+                make_config({
                     "controller": {
                         "local": "./build/controller",
                         "remote": "/opt/disco/bin/controller",
@@ -551,7 +548,7 @@ class TestRollbackPolishedOutput:
 
         result = runner.invoke(
             main,
-            ["rollback", "controller", "-m", "som1", "--config-dir", str(config_dir)],
+            ["rollback", "controller", "--config-dir", str(config_dir)],
             color=True,
         )
 
@@ -567,7 +564,7 @@ class TestRollbackPolishedOutput:
         config_file = config_dir / "config.yaml"
         config_file.write_text(
             yaml.dump(
-                make_module_config({
+                make_config({
                     "controller": {
                         "local": "./build/controller",
                         "remote": "/opt/disco/bin/controller",
@@ -588,7 +585,7 @@ class TestRollbackPolishedOutput:
 
         result = runner.invoke(
             main,
-            ["rollback", "controller", "-m", "som1", "--config-dir", str(config_dir)],
+            ["rollback", "controller", "--config-dir", str(config_dir)],
         )
 
         assert result.exit_code == 0
@@ -617,7 +614,7 @@ class TestRollbackDialBehavior:
         config_file = config_dir / "config.yaml"
         config_file.write_text(
             yaml.dump(
-                make_module_config({
+                make_config({
                     "controller": {
                         "local": "./build/controller",
                         "remote": "/opt/disco/bin/controller",
@@ -651,7 +648,7 @@ class TestRollbackDialBehavior:
 
         result = runner.invoke(
             main,
-            ["rollback", "controller", "-m", "som1", "--config-dir", str(config_dir)],
+            ["rollback", "controller", "--config-dir", str(config_dir)],
         )
 
         assert result.exit_code == 0
@@ -670,7 +667,7 @@ class TestRollbackDialBehavior:
         config_file = config_dir / "config.yaml"
         config_file.write_text(
             yaml.dump(
-                make_module_config({
+                make_config({
                     "controller": {
                         "local": "./build/controller",
                         "remote": "/opt/disco/bin/controller",
@@ -704,7 +701,7 @@ class TestRollbackDialBehavior:
 
         result = runner.invoke(
             main,
-            ["rollback", "controller", "-m", "som1", "--config-dir", str(config_dir)],
+            ["rollback", "controller", "--config-dir", str(config_dir)],
         )
 
         # Should warn (not error) because we're at the oldest version
@@ -722,7 +719,7 @@ class TestRollbackDialBehavior:
         config_file = config_dir / "config.yaml"
         config_file.write_text(
             yaml.dump(
-                make_module_config({
+                make_config({
                     "controller": {
                         "local": "./build/controller",
                         "remote": "/opt/disco/bin/controller",
@@ -756,7 +753,7 @@ class TestRollbackDialBehavior:
         # Explicitly request C by hash even though we're at A (oldest)
         result = runner.invoke(
             main,
-            ["rollback", "controller", "cccccccc", "-m", "som1", "--config-dir", str(config_dir)],
+            ["rollback", "controller", "cccccccc", "--config-dir", str(config_dir)],
         )
 
         assert result.exit_code == 0
@@ -775,7 +772,7 @@ class TestRollbackByHash:
         config_file = config_dir / "config.yaml"
         config_file.write_text(
             yaml.dump(
-                make_module_config({
+                make_config({
                     "controller": {
                         "local": "./build/controller",
                         "remote": "/opt/disco/bin/controller",
@@ -797,7 +794,7 @@ class TestRollbackByHash:
         # Rollback by hash only (not full version string)
         result = runner.invoke(
             main,
-            ["rollback", "controller", "bbbbbbbb", "-m", "som1", "--config-dir", str(config_dir)],
+            ["rollback", "controller", "bbbbbbbb", "--config-dir", str(config_dir)],
         )
 
         assert result.exit_code == 0

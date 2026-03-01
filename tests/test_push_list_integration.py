@@ -14,17 +14,14 @@ from click.testing import CliRunner
 from satdeploy.cli import main
 
 
-def make_module_config(apps: dict) -> dict:
-    """Create a module-based config for testing."""
+def make_config(apps: dict) -> dict:
+    """Create a flat config for testing."""
     return {
-        "modules": {
-            "som1": {
-                "host": "192.168.1.50",
-                "user": "root",
-                "csp_addr": 5421,
-            }
-        },
-        "appsys": {},
+        "name": "som1",
+        "transport": "ssh",
+        "host": "192.168.1.50",
+        "user": "root",
+        "csp_addr": 5421,
         "backup_dir": "/home/user/.satdeploy/backups",
         "max_backups": 10,
         "apps": apps,
@@ -57,7 +54,7 @@ class TestPushThenListWorkflow:
         config_file = config_dir / "config.yaml"
         config_file.write_text(
             yaml.dump(
-                make_module_config({
+                make_config({
                     "test_app": {
                         "local": str(binary_v1),
                         "remote": "/home/user/bin/test_app",
@@ -77,7 +74,7 @@ class TestPushThenListWorkflow:
 
         result1 = runner.invoke(
             main,
-            ["push", "test_app", "-m", "som1", "--config-dir", str(config_dir)],
+            ["push", "test_app", "--config-dir", str(config_dir)],
         )
         assert result1.exit_code == 0, f"First push failed: {result1.output}"
 
@@ -94,7 +91,7 @@ class TestPushThenListWorkflow:
 
         result2 = runner.invoke(
             main,
-            ["push", "test_app", "-m", "som1", "--config-dir", str(config_dir)],
+            ["push", "test_app", "--config-dir", str(config_dir)],
         )
         assert result2.exit_code == 0, f"Second push failed: {result2.output}"
 
@@ -109,7 +106,7 @@ class TestPushThenListWorkflow:
 
         result3 = runner.invoke(
             main,
-            ["list", "test_app", "-m", "som1", "--config-dir", str(config_dir)],
+            ["list", "test_app", "--config-dir", str(config_dir)],
         )
 
         assert result3.exit_code == 0, f"List failed: {result3.output}"
@@ -135,7 +132,7 @@ class TestPushThenListWorkflow:
         config_file = config_dir / "config.yaml"
         config_file.write_text(
             yaml.dump(
-                make_module_config({
+                make_config({
                     "test_app": {
                         "local": str(binary),
                         "remote": "/home/user/bin/test_app",
@@ -154,7 +151,7 @@ class TestPushThenListWorkflow:
 
         result = runner.invoke(
             main,
-            ["list", "test_app", "-m", "som1", "--config-dir", str(config_dir)],
+            ["list", "test_app", "--config-dir", str(config_dir)],
         )
 
         assert result.exit_code == 0
@@ -187,7 +184,7 @@ class TestListShowsCurrentlyDeployed:
         config_file = config_dir / "config.yaml"
         config_file.write_text(
             yaml.dump(
-                make_module_config({
+                make_config({
                     "test_app": {
                         "local": str(binary),
                         "remote": "/home/user/bin/test_app",
@@ -236,7 +233,7 @@ class TestListShowsCurrentlyDeployed:
 
         result = runner.invoke(
             main,
-            ["list", "test_app", "-m", "som1", "--config-dir", str(config_dir)],
+            ["list", "test_app", "--config-dir", str(config_dir)],
         )
 
         assert result.exit_code == 0, f"List failed: {result.output}"
@@ -273,7 +270,7 @@ class TestListShowsCurrentlyDeployed:
         config_file = config_dir / "config.yaml"
         config_file.write_text(
             yaml.dump(
-                make_module_config({
+                make_config({
                     "test_app": {
                         "local": str(binary),
                         "remote": "/home/user/bin/test_app",
@@ -308,7 +305,7 @@ class TestListShowsCurrentlyDeployed:
 
         result = runner.invoke(
             main,
-            ["list", "test_app", "-m", "som1", "--config-dir", str(config_dir)],
+            ["list", "test_app", "--config-dir", str(config_dir)],
         )
 
         assert result.exit_code == 0, f"List failed: {result.output}"
@@ -339,7 +336,7 @@ class TestBackupCreatedOnSecondPush:
         config_file = config_dir / "config.yaml"
         config_file.write_text(
             yaml.dump(
-                make_module_config({
+                make_config({
                     "test_app": {
                         "local": str(binary),
                         "remote": "/home/user/bin/test_app",
@@ -368,7 +365,7 @@ class TestBackupCreatedOnSecondPush:
 
         result = runner.invoke(
             main,
-            ["push", "test_app", "-m", "som1", "--config-dir", str(config_dir)],
+            ["push", "test_app", "--config-dir", str(config_dir)],
         )
 
         assert result.exit_code == 0, f"Push failed: {result.output}"

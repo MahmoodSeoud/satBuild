@@ -35,7 +35,10 @@ class TestConfigLoad:
         """Should load a valid YAML config file."""
         config_file = tmp_path / "config.yaml"
         config_data = {
-            "target": {"host": "192.168.1.50", "user": "root"},
+            "name": "som1",
+            "transport": "ssh",
+            "host": "192.168.1.50",
+            "user": "root",
             "backup_dir": "/opt/satdeploy/backups",
             "max_backups": 10,
             "apps": {
@@ -52,8 +55,8 @@ class TestConfigLoad:
         loaded = config.load()
 
         assert loaded is not None
-        assert loaded["target"]["host"] == "192.168.1.50"
-        assert loaded["target"]["user"] == "root"
+        assert loaded["host"] == "192.168.1.50"
+        assert loaded["user"] == "root"
         assert loaded["apps"]["controller"]["service"] == "controller.service"
 
     def test_load_invalid_yaml_raises_error(self, tmp_path):
@@ -74,7 +77,7 @@ class TestConfigSave:
         config_dir = tmp_path / "new_dir"
         config = Config(config_dir=config_dir)
 
-        config.save({"target": {"host": "192.168.1.50"}})
+        config.save({"host": "192.168.1.50"})
 
         assert config_dir.exists()
         assert (config_dir / "config.yaml").exists()
@@ -83,7 +86,10 @@ class TestConfigSave:
         """Saved config should be valid YAML."""
         config = Config(config_dir=tmp_path)
         data = {
-            "target": {"host": "192.168.1.50", "user": "root"},
+            "name": "som1",
+            "transport": "ssh",
+            "host": "192.168.1.50",
+            "user": "root",
             "backup_dir": "/opt/satdeploy/backups",
         }
 
@@ -96,25 +102,62 @@ class TestConfigSave:
 class TestConfigValidation:
     """Test configuration validation."""
 
-    def test_validate_missing_target_fails(self):
-        """Config without target should fail validation."""
+    def test_validate_ssh_missing_host_fails(self):
+        """Config without host should fail validation for SSH transport."""
         config = Config()
-        errors = config.validate({"apps": {}})
-        assert "target" in errors
+        errors = config.validate({"transport": "ssh", "user": "root", "apps": {}})
+        assert "host" in errors
 
-    def test_validate_missing_host_fails(self):
-        """Config without target.host should fail validation."""
+    def test_validate_ssh_missing_user_fails(self):
+        """Config without user should fail validation for SSH transport."""
         config = Config()
-        errors = config.validate({"target": {"user": "root"}, "apps": {}})
-        assert "target.host" in errors
+        errors = config.validate({"transport": "ssh", "host": "1.2.3.4", "apps": {}})
+        assert "user" in errors
 
-    def test_validate_valid_config_passes(self):
-        """Valid config should pass validation."""
+    def test_validate_ssh_valid_config_passes(self):
+        """Valid SSH config should pass validation."""
         config = Config()
         data = {
-            "target": {"host": "192.168.1.50", "user": "root"},
+            "transport": "ssh",
+            "host": "192.168.1.50",
+            "user": "root",
             "backup_dir": "/opt/satdeploy/backups",
             "max_backups": 10,
+            "apps": {},
+        }
+        errors = config.validate(data)
+        assert errors == []
+
+    def test_validate_csp_missing_zmq_endpoint_fails(self):
+        """CSP config without zmq_endpoint should fail validation."""
+        config = Config()
+        errors = config.validate({"transport": "csp", "agent_node": 5424, "apps": {}})
+        assert "zmq_endpoint" in errors
+
+    def test_validate_csp_missing_agent_node_fails(self):
+        """CSP config without agent_node should fail validation."""
+        config = Config()
+        errors = config.validate({"transport": "csp", "zmq_endpoint": "tcp://localhost:4040", "apps": {}})
+        assert "agent_node" in errors
+
+    def test_validate_csp_valid_config_passes(self):
+        """Valid CSP config should pass validation."""
+        config = Config()
+        data = {
+            "transport": "csp",
+            "zmq_endpoint": "tcp://localhost:4040",
+            "agent_node": 5424,
+            "apps": {},
+        }
+        errors = config.validate(data)
+        assert errors == []
+
+    def test_validate_defaults_to_ssh(self):
+        """Config without transport should default to SSH validation."""
+        config = Config()
+        data = {
+            "host": "192.168.1.50",
+            "user": "root",
             "apps": {},
         }
         errors = config.validate(data)
@@ -124,7 +167,9 @@ class TestConfigValidation:
         """App without local path should fail validation."""
         config = Config()
         data = {
-            "target": {"host": "192.168.1.50", "user": "root"},
+            "transport": "ssh",
+            "host": "192.168.1.50",
+            "user": "root",
             "apps": {"myapp": {"remote": "/usr/bin/myapp"}},
         }
         errors = config.validate(data)
@@ -134,7 +179,9 @@ class TestConfigValidation:
         """App without remote path should fail validation."""
         config = Config()
         data = {
-            "target": {"host": "192.168.1.50", "user": "root"},
+            "transport": "ssh",
+            "host": "192.168.1.50",
+            "user": "root",
             "apps": {"myapp": {"local": "./build/myapp"}},
         }
         errors = config.validate(data)
@@ -148,7 +195,10 @@ class TestConfigGetApp:
         """Should return config for a specific app."""
         config_file = tmp_path / "config.yaml"
         config_data = {
-            "target": {"host": "192.168.1.50", "user": "root"},
+            "name": "som1",
+            "transport": "ssh",
+            "host": "192.168.1.50",
+            "user": "root",
             "apps": {
                 "controller": {
                     "local": "./build/controller",
@@ -170,7 +220,10 @@ class TestConfigGetApp:
         """Getting a non-existent app should return None."""
         config_file = tmp_path / "config.yaml"
         config_data = {
-            "target": {"host": "192.168.1.50", "user": "root"},
+            "name": "som1",
+            "transport": "ssh",
+            "host": "192.168.1.50",
+            "user": "root",
             "apps": {},
         }
         config_file.write_text(yaml.dump(config_data))
@@ -245,31 +298,181 @@ class TestAppConfig:
         assert app.vmem_dir is None
 
 
-class TestGetModules:
-    """Test get_modules() and get_module() methods."""
+class TestModuleName:
+    """Test module_name property."""
 
-    def test_get_modules_returns_all_modules(self, tmp_path):
-        """get_modules() should return all configured modules."""
+    def test_module_name_returns_name_from_config(self, tmp_path):
+        """module_name should return the name field from config."""
+        config_file = tmp_path / "config.yaml"
+        config_data = {"name": "som1", "transport": "ssh", "host": "1.2.3.4", "user": "root", "apps": {}}
+        config_file.write_text(yaml.dump(config_data))
+
+        config = Config(config_dir=tmp_path)
+        config.load()
+        assert config.module_name == "som1"
+
+    def test_module_name_defaults_to_default(self, tmp_path):
+        """module_name should default to 'default' when not set."""
+        config_file = tmp_path / "config.yaml"
+        config_data = {"transport": "ssh", "host": "1.2.3.4", "user": "root", "apps": {}}
+        config_file.write_text(yaml.dump(config_data))
+
+        config = Config(config_dir=tmp_path)
+        config.load()
+        assert config.module_name == "default"
+
+
+class TestGetTarget:
+    """Test get_target() method."""
+
+    def test_get_target_returns_module_config(self, tmp_path):
+        """get_target() should return a ModuleConfig from flat config."""
         config_file = tmp_path / "config.yaml"
         config_data = {
-            "modules": {
-                "som1": {
-                    "host": "192.168.1.10",
-                    "user": "root",
-                    "csp_addr": 5421,
-                },
-                "som2": {
-                    "host": "192.168.1.11",
-                    "user": "root",
-                    "csp_addr": 5475,
-                },
-            },
+            "name": "som1",
+            "transport": "ssh",
+            "host": "192.168.1.10",
+            "user": "root",
+            "csp_addr": 5421,
+            "apps": {},
+        }
+        config_file.write_text(yaml.dump(config_data))
+
+        config = Config(config_dir=tmp_path)
+        config.load()
+        target = config.get_target()
+
+        assert isinstance(target, ModuleConfig)
+        assert target.name == "som1"
+        assert target.host == "192.168.1.10"
+        assert target.user == "root"
+        assert target.csp_addr == 5421
+
+    def test_get_target_with_appsys_settings(self, tmp_path):
+        """get_target() should inherit appsys settings."""
+        config_file = tmp_path / "config.yaml"
+        config_data = {
+            "name": "som1",
+            "transport": "ssh",
+            "host": "192.168.1.10",
+            "user": "root",
+            "csp_addr": 5421,
             "appsys": {
                 "netmask": 8,
                 "interface": 0,
                 "baudrate": 100000,
                 "vmem_path": "/home/root/a53vmem",
             },
+            "apps": {},
+        }
+        config_file.write_text(yaml.dump(config_data))
+
+        config = Config(config_dir=tmp_path)
+        config.load()
+        target = config.get_target()
+
+        assert target.netmask == 8
+        assert target.interface == 0
+        assert target.baudrate == 100000
+        assert target.vmem_path == "/home/root/a53vmem"
+
+    def test_get_target_csp_transport(self, tmp_path):
+        """get_target() should support CSP transport."""
+        config_file = tmp_path / "config.yaml"
+        config_data = {
+            "name": "som1-csp",
+            "transport": "csp",
+            "zmq_endpoint": "tcp://localhost:4040",
+            "agent_node": 5424,
+            "appsys_node": 5421,
+            "apps": {},
+        }
+        config_file.write_text(yaml.dump(config_data))
+
+        config = Config(config_dir=tmp_path)
+        config.load()
+        target = config.get_target()
+
+        assert target.transport == "csp"
+        assert target.zmq_endpoint == "tcp://localhost:4040"
+        assert target.agent_node == 5424
+        assert target.appsys_node == 5421
+
+    def test_get_target_defaults_to_ssh(self, tmp_path):
+        """get_target() should default to SSH transport."""
+        config_file = tmp_path / "config.yaml"
+        config_data = {
+            "host": "192.168.1.10",
+            "user": "root",
+            "apps": {},
+        }
+        config_file.write_text(yaml.dump(config_data))
+
+        config = Config(config_dir=tmp_path)
+        config.load()
+        target = config.get_target()
+
+        assert target.transport == "ssh"
+        assert target.host == "192.168.1.10"
+        assert target.user == "root"
+
+    def test_get_target_with_app_nodes(self, tmp_path):
+        """get_target() should support per-app run_node via app_nodes."""
+        config_file = tmp_path / "config.yaml"
+        config_data = {
+            "name": "som1",
+            "transport": "csp",
+            "zmq_endpoint": "tcp://localhost:4040",
+            "agent_node": 5424,
+            "appsys_node": 5421,
+            "app_nodes": {
+                "dipp": 5423,
+                "camera-control": 5422,
+            },
+            "apps": {},
+        }
+        config_file.write_text(yaml.dump(config_data))
+
+        config = Config(config_dir=tmp_path)
+        config.load()
+        target = config.get_target()
+
+        assert target.app_nodes == {"dipp": 5423, "camera-control": 5422}
+        assert target.get_run_node("dipp") == 5423
+        assert target.get_run_node("camera-control") == 5422
+        assert target.get_run_node("unknown-app") is None
+
+    def test_get_target_without_app_nodes(self, tmp_path):
+        """get_target().get_run_node() returns None when app_nodes not set."""
+        config_file = tmp_path / "config.yaml"
+        config_data = {
+            "name": "som1",
+            "transport": "csp",
+            "zmq_endpoint": "tcp://localhost:4040",
+            "agent_node": 5424,
+            "apps": {},
+        }
+        config_file.write_text(yaml.dump(config_data))
+
+        config = Config(config_dir=tmp_path)
+        config.load()
+        target = config.get_target()
+
+        assert target.app_nodes is None
+        assert target.get_run_node("dipp") is None
+
+
+class TestGetModules:
+    """Test get_modules() returns single-entry dict."""
+
+    def test_get_modules_returns_single_entry(self, tmp_path):
+        """get_modules() should return single-entry dict for flat config."""
+        config_file = tmp_path / "config.yaml"
+        config_data = {
+            "name": "som1",
+            "transport": "ssh",
+            "host": "192.168.1.10",
+            "user": "root",
             "apps": {},
         }
         config_file.write_text(yaml.dump(config_data))
@@ -278,71 +481,28 @@ class TestGetModules:
         config.load()
         modules = config.get_modules()
 
-        assert len(modules) == 2
+        assert len(modules) == 1
         assert "som1" in modules
-        assert "som2" in modules
         assert isinstance(modules["som1"], ModuleConfig)
 
-    def test_get_module_returns_module_with_appsys_settings(self, tmp_path):
-        """get_module() should return ModuleConfig with inherited appsys settings."""
+    def test_get_module_returns_target(self, tmp_path):
+        """get_module() should return target (ignoring name arg)."""
         config_file = tmp_path / "config.yaml"
         config_data = {
-            "modules": {
-                "som1": {
-                    "host": "192.168.1.10",
-                    "user": "root",
-                    "csp_addr": 5421,
-                },
-            },
-            "appsys": {
-                "netmask": 8,
-                "interface": 0,
-                "baudrate": 100000,
-                "vmem_path": "/home/root/a53vmem",
-            },
+            "name": "som1",
+            "transport": "ssh",
+            "host": "192.168.1.10",
+            "user": "root",
             "apps": {},
         }
         config_file.write_text(yaml.dump(config_data))
 
         config = Config(config_dir=tmp_path)
         config.load()
-        module = config.get_module("som1")
+        module = config.get_module("anything")
 
         assert module.name == "som1"
         assert module.host == "192.168.1.10"
-        assert module.user == "root"
-        assert module.csp_addr == 5421
-        assert module.netmask == 8
-        assert module.interface == 0
-        assert module.baudrate == 100000
-        assert module.vmem_path == "/home/root/a53vmem"
-
-    def test_get_module_unknown_raises_keyerror(self, tmp_path):
-        """get_module() should raise KeyError for unknown module."""
-        config_file = tmp_path / "config.yaml"
-        config_data = {
-            "modules": {
-                "som1": {
-                    "host": "192.168.1.10",
-                    "user": "root",
-                    "csp_addr": 5421,
-                },
-            },
-            "appsys": {
-                "netmask": 8,
-                "interface": 0,
-                "baudrate": 100000,
-                "vmem_path": "/home/root/a53vmem",
-            },
-            "apps": {},
-        }
-        config_file.write_text(yaml.dump(config_data))
-
-        config = Config(config_dir=tmp_path)
-        config.load()
-
-        with pytest.raises(KeyError):
-            config.get_module("unknown")
 
 
 class TestGetAppConfig:
@@ -352,19 +512,10 @@ class TestGetAppConfig:
         """get_app() should return AppConfig object."""
         config_file = tmp_path / "config.yaml"
         config_data = {
-            "modules": {
-                "som1": {
-                    "host": "192.168.1.10",
-                    "user": "root",
-                    "csp_addr": 5421,
-                },
-            },
-            "appsys": {
-                "netmask": 8,
-                "interface": 0,
-                "baudrate": 100000,
-                "vmem_path": "/home/root/a53vmem",
-            },
+            "name": "som1",
+            "transport": "ssh",
+            "host": "192.168.1.10",
+            "user": "root",
             "apps": {
                 "a53-app-sys-manager": {
                     "local": "./build/a53-app-sys-manager",
@@ -393,14 +544,10 @@ class TestGetAppConfig:
         """get_app() should handle missing optional fields as None."""
         config_file = tmp_path / "config.yaml"
         config_data = {
-            "modules": {
-                "som1": {
-                    "host": "192.168.1.10",
-                    "user": "root",
-                    "csp_addr": 5421,
-                },
-            },
-            "appsys": {},
+            "name": "som1",
+            "transport": "ssh",
+            "host": "192.168.1.10",
+            "user": "root",
             "apps": {
                 "upload_client": {
                     "local": "./build/upload_client",
@@ -423,8 +570,10 @@ class TestGetAppConfig:
         """get_app() should return None for unknown app."""
         config_file = tmp_path / "config.yaml"
         config_data = {
-            "modules": {},
-            "appsys": {},
+            "name": "som1",
+            "transport": "ssh",
+            "host": "192.168.1.10",
+            "user": "root",
             "apps": {},
         }
         config_file.write_text(yaml.dump(config_data))
@@ -441,8 +590,10 @@ class TestGetAllAppNames:
         """get_all_app_names() should return list of all app names."""
         config_file = tmp_path / "config.yaml"
         config_data = {
-            "modules": {},
-            "appsys": {},
+            "name": "som1",
+            "transport": "ssh",
+            "host": "192.168.1.10",
+            "user": "root",
             "apps": {
                 "app1": {"local": "./a", "remote": "/a"},
                 "app2": {"local": "./b", "remote": "/b"},
@@ -464,8 +615,10 @@ class TestGetAllAppNames:
         """get_all_app_names() should return empty list when no apps."""
         config_file = tmp_path / "config.yaml"
         config_data = {
-            "modules": {},
-            "appsys": {},
+            "name": "som1",
+            "transport": "ssh",
+            "host": "192.168.1.10",
+            "user": "root",
             "apps": {},
         }
         config_file.write_text(yaml.dump(config_data))
@@ -477,64 +630,17 @@ class TestGetAllAppNames:
         assert names == []
 
 
-class TestCSPModuleConfig:
-    """Test CSP-specific module configuration."""
-
-    def test_module_config_with_csp_transport(self, tmp_path):
-        """ModuleConfig should support CSP transport type."""
-        config_file = tmp_path / "config.yaml"
-        config_data = {
-            "modules": {
-                "som1-csp": {
-                    "transport": "csp",
-                    "zmq_endpoint": "tcp://localhost:4040",
-                    "agent_node": 5424,
-                    "appsys_node": 5421,
-                },
-            },
-            "appsys": {},
-            "apps": {},
-        }
-        config_file.write_text(yaml.dump(config_data))
-
-        config = Config(config_dir=tmp_path)
-        config.load()
-        module = config.get_module("som1-csp")
-
-        assert module.transport == "csp"
-        assert module.zmq_endpoint == "tcp://localhost:4040"
-        assert module.agent_node == 5424
-        assert module.appsys_node == 5421
-
-    def test_module_config_defaults_to_ssh_transport(self, tmp_path):
-        """ModuleConfig should default to SSH transport."""
-        config_file = tmp_path / "config.yaml"
-        config_data = {
-            "modules": {
-                "som1": {
-                    "host": "192.168.1.10",
-                    "user": "root",
-                },
-            },
-            "appsys": {},
-            "apps": {},
-        }
-        config_file.write_text(yaml.dump(config_data))
-
-        config = Config(config_dir=tmp_path)
-        config.load()
-        module = config.get_module("som1")
-
-        assert module.transport == "ssh"
-        assert module.host == "192.168.1.10"
-        assert module.user == "root"
+class TestCSPAppConfig:
+    """Test CSP-specific app configuration."""
 
     def test_app_config_with_param_name(self, tmp_path):
         """AppConfig should support param_name for CSP control."""
         config_file = tmp_path / "config.yaml"
         config_data = {
-            "modules": {},
-            "appsys": {},
+            "name": "som1",
+            "transport": "csp",
+            "zmq_endpoint": "tcp://localhost:4040",
+            "agent_node": 5424,
             "apps": {
                 "dipp": {
                     "local": "./build/dipp",
@@ -551,73 +657,6 @@ class TestCSPModuleConfig:
 
         assert app.param == "mng_dipp"
 
-    def test_module_config_with_app_nodes(self, tmp_path):
-        """ModuleConfig should support per-app run_node via app_nodes."""
-        config_file = tmp_path / "config.yaml"
-        config_data = {
-            "modules": {
-                "som1": {
-                    "transport": "csp",
-                    "zmq_endpoint": "tcp://localhost:4040",
-                    "agent_node": 5424,
-                    "appsys_node": 5421,
-                    "app_nodes": {
-                        "dipp": 5423,
-                        "camera-control": 5422,
-                    },
-                },
-                "som2": {
-                    "transport": "csp",
-                    "zmq_endpoint": "tcp://localhost:4040",
-                    "agent_node": 5478,
-                    "appsys_node": 5475,
-                    "app_nodes": {
-                        "dipp": 5477,
-                        "camera-control": 5476,
-                    },
-                },
-            },
-            "appsys": {},
-            "apps": {},
-        }
-        config_file.write_text(yaml.dump(config_data))
-
-        config = Config(config_dir=tmp_path)
-        config.load()
-
-        som1 = config.get_module("som1")
-        assert som1.app_nodes == {"dipp": 5423, "camera-control": 5422}
-        assert som1.get_run_node("dipp") == 5423
-        assert som1.get_run_node("camera-control") == 5422
-        assert som1.get_run_node("unknown-app") is None
-
-        som2 = config.get_module("som2")
-        assert som2.get_run_node("dipp") == 5477
-        assert som2.get_run_node("camera-control") == 5476
-
-    def test_module_config_without_app_nodes(self, tmp_path):
-        """ModuleConfig.get_run_node() returns None when app_nodes not set."""
-        config_file = tmp_path / "config.yaml"
-        config_data = {
-            "modules": {
-                "som1": {
-                    "transport": "csp",
-                    "zmq_endpoint": "tcp://localhost:4040",
-                    "agent_node": 5424,
-                },
-            },
-            "appsys": {},
-            "apps": {},
-        }
-        config_file.write_text(yaml.dump(config_data))
-
-        config = Config(config_dir=tmp_path)
-        config.load()
-        module = config.get_module("som1")
-
-        assert module.app_nodes is None
-        assert module.get_run_node("dipp") is None
-
 
 class TestGetAppsys:
     """Test get_appsys() method."""
@@ -626,7 +665,10 @@ class TestGetAppsys:
         """get_appsys() should return appsys settings dict."""
         config_file = tmp_path / "config.yaml"
         config_data = {
-            "modules": {},
+            "name": "som1",
+            "transport": "ssh",
+            "host": "192.168.1.10",
+            "user": "root",
             "appsys": {
                 "netmask": 8,
                 "interface": 0,
@@ -650,7 +692,10 @@ class TestGetAppsys:
         """get_appsys() should return empty dict if not configured."""
         config_file = tmp_path / "config.yaml"
         config_data = {
-            "target": {"host": "192.168.1.50", "user": "root"},
+            "name": "som1",
+            "transport": "ssh",
+            "host": "192.168.1.50",
+            "user": "root",
             "apps": {},
         }
         config_file.write_text(yaml.dump(config_data))
