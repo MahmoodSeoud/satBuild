@@ -1,0 +1,4 @@
+apps:
+  test_app:
+    local: /satbuild/demo/v2/test_app
+    remote: /opt/demo/bin/test_app

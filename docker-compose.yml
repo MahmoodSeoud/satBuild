@@ -1,0 +1,74 @@
+services:
+  # Build C components on first start (or after code changes)
+  build:
+    image: satdev
+    build: .
+    volumes:
+      - .:/satbuild
+    command: >
+      bash -c "
+        cd /satbuild/satdeploy-apm &&
+        ([ -d build ] || meson setup build) &&
+        ninja -C build &&
+        cp build/libcsh_satdeploy_apm.so /root/.local/lib/csh/ &&
+
+        cd /satbuild/satdeploy-agent &&
+        ([ -d build ] || meson setup build) &&
+        ninja -C build &&
+
+        echo '=== Build complete ==='
+      "
+
+  # ZMQ proxy — routes CSP packets between ground and agent
+  # Uses 9600/9601 to avoid conflicts (macOS AirPlay uses 7000)
+  zmqproxy:
+    image: satdev
+    build: .
+    ports:
+      - "9600:9600"
+      - "9601:9601"
+    command: zmqproxy -s tcp://0.0.0.0:9600 -p tcp://0.0.0.0:9601
+    restart: unless-stopped
+
+  # satdeploy-agent — runs on "satellite" side, handles deploy commands
+  agent:
+    image: satdev
+    build: .
+    volumes:
+      - .:/satbuild
+    # -p zmqproxy: connect to zmqproxy by Docker DNS
+    # -S/-P: match zmqproxy's custom ports
+    command: /satbuild/satdeploy-agent/build/satdeploy-agent -p zmqproxy -S 9600 -P 9601
+    depends_on:
+      build:
+        condition: service_completed_successfully
+      zmqproxy:
+        condition: service_started
+    restart: unless-stopped
+
+  # CSH ground station (interactive — use: docker compose run csh)
+  csh:
+    image: satdev
+    build: .
+    volumes:
+      - .:/satbuild
+    # Custom init: connect CSH to zmqproxy on 9600/9601 via Docker DNS
+    command: >
+      bash -c "
+        cp /satbuild/satdeploy-apm/build/libcsh_satdeploy_apm.so /root/.local/lib/csh/ 2>/dev/null
+        mkdir -p /root/.satdeploy && cp /satbuild/demo/csh-config.yaml /root/.satdeploy/config.yaml
+        echo 'csp init' > /tmp/zmq-compose.csh
+        echo 'csp add zmq -d -S 9600 -P 9601 19 zmqproxy' >> /tmp/zmq-compose.csh
+        echo 'apm load' >> /tmp/zmq-compose.csh
+        echo 'node 5425' >> /tmp/zmq-compose.csh
+        env HOME=/root csh -i /tmp/zmq-compose.csh
+      "
+    depends_on:
+      build:
+        condition: service_completed_successfully
+      zmqproxy:
+        condition: service_started
+    profiles:
+      - csh
+    stdin_open: true
+    tty: true

@@ -1,6 +1,5 @@
 """CLI entry point for satdeploy."""
 
-import hashlib
 import os
 from datetime import datetime
 from pathlib import Path
@@ -10,20 +9,27 @@ import click
 from satdeploy.config import DEFAULT_CONFIG_DIR, Config, ModuleConfig, AppConfig
 from satdeploy.dependencies import DependencyResolver
 from satdeploy.deployer import Deployer
+from satdeploy.hash import compute_file_hash
 from satdeploy.history import DeploymentRecord, History
 from satdeploy.output import success, warning, step, SYMBOLS, SatDeployError, ColoredGroup
 from satdeploy.services import ServiceManager, ServiceStatus
 from satdeploy.ssh import SSHClient, SSHError
 from satdeploy.templates import render_service_template, compute_service_hash
 from satdeploy.transport import Transport, SSHTransport, CSPTransport, TransportError
+from satdeploy import demo as demo_module
 
 
-def get_transport(module: ModuleConfig, backup_dir: str) -> Transport:
+def get_transport(
+    module: ModuleConfig,
+    backup_dir: str,
+    apps: dict[str, dict] | None = None,
+) -> Transport:
     """Create the appropriate transport for a module.
 
     Args:
         module: The module configuration.
         backup_dir: Remote backup directory path.
+        apps: Dictionary of app configs (used by SSH transport for status queries).
 
     Returns:
         Transport instance (SSHTransport or CSPTransport).
@@ -36,6 +42,7 @@ def get_transport(module: ModuleConfig, backup_dir: str) -> Transport:
             host=module.host,
             user=module.user,
             backup_dir=backup_dir,
+            apps=apps,
         )
     elif module.transport == "csp":
         return CSPTransport(
@@ -43,6 +50,8 @@ def get_transport(module: ModuleConfig, backup_dir: str) -> Transport:
             agent_node=module.agent_node,
             ground_node=module.ground_node,
             backup_dir=backup_dir,
+            zmq_pub_port=module.zmq_pub_port,
+            zmq_sub_port=module.zmq_sub_port,
         )
     else:
         raise ValueError(f"Unknown transport type: {module.transport}")
@@ -242,6 +251,17 @@ def sync_service_file(
     return local_hash
 
 
+def config_dir_option(f):
+    """Shared --config-dir option with SATDEPLOY_CONFIG_DIR env var support."""
+    return click.option(
+        "--config-dir",
+        type=click.Path(path_type=Path),
+        default=None,
+        envvar="SATDEPLOY_CONFIG_DIR",
+        help="Config directory (default: ~/.satdeploy)",
+    )(f)
+
+
 @click.group(cls=ColoredGroup)
 def main():
     """Deploy binaries to embedded Linux targets."""
@@ -249,12 +269,7 @@ def main():
 
 
 @main.command()
-@click.option(
-    "--config-dir",
-    type=click.Path(path_type=Path),
-    default=None,
-    help="Config directory (default: ~/.satdeploy)",
-)
+@config_dir_option
 def init(config_dir: Path | None):
     """Interactive setup, creates config.yaml."""
     config_dir = config_dir or DEFAULT_CONFIG_DIR
@@ -282,18 +297,18 @@ def init(config_dir: Path | None):
         data["user"] = click.prompt("SSH user", default="root")
     else:  # csp
         data["zmq_endpoint"] = click.prompt(
-            "ZMQ endpoint",
-            default="tcp://localhost:4040",
+            "ZMQ endpoint (zmqproxy host)",
+            default="tcp://localhost:9600",
         )
         data["agent_node"] = click.prompt(
             "Agent CSP node",
             type=int,
-            default=5424,
+            default=5425,
         )
         data["ground_node"] = click.prompt(
             "Ground CSP node",
             type=int,
-            default=4040,
+            default=40,
         )
         data["appsys_node"] = click.prompt(
             "App-sys-manager CSP node",
@@ -327,18 +342,17 @@ def init(config_dir: Path | None):
     default=None,
     help="Override local path for the binary",
 )
-@click.option(
-    "--config-dir",
-    type=click.Path(path_type=Path),
-    default=None,
-    help="Config directory (default: ~/.satdeploy)",
-)
+@config_dir_option
+@click.option("--dry-run", is_flag=True, help="Show what would happen without deploying")
+@click.option("-y", "--yes", is_flag=True, help="Skip confirmation prompts")
 def push(
     apps: tuple[str, ...],
     all_apps: bool,
     clean_vmem: bool,
     local: str | None,
     config_dir: Path | None,
+    dry_run: bool,
+    yes: bool,
 ):
     """Deploy one or more apps to a target.
 
@@ -376,6 +390,39 @@ def push(
         if not os.path.exists(local_path_check):
             raise SatDeployError(f"Local file not found: {local_path_check}")
 
+    # Dry-run: show what would happen and exit
+    if dry_run:
+        target_name = module_config.zmq_endpoint if module_config.transport == "csp" else module_config.host
+        click.echo(click.style(f"Dry run — no changes will be made", bold=True))
+        click.echo(f"Target: {target_name} ({module_config.transport})")
+        click.echo("")
+        for app_name in apps:
+            app_cfg = get_app_config_or_error(config, app_name)
+            lp = os.path.expanduser(local or app_cfg.local) if len(apps) == 1 else os.path.expanduser(app_cfg.local)
+            file_size = os.path.getsize(lp)
+            local_hash = compute_file_hash(lp)
+            size_str = f"{file_size / 1024:.1f} KB" if file_size < 1024 * 1024 else f"{file_size / (1024 * 1024):.1f} MB"
+            click.echo(f"  {SYMBOLS['arrow']} {app_name}")
+            click.echo(f"    local:   {lp} ({size_str}, {local_hash})")
+            click.echo(f"    remote:  {app_cfg.remote}")
+            if app_cfg.service:
+                services = get_services_to_manage(config, app_name, app_cfg.service)
+                svc_names = [s[1] for s in services]
+                click.echo(f"    services: {', '.join(svc_names)} (will restart)")
+        click.echo("")
+        click.echo("Run without --dry-run to deploy.")
+        return
+
+    # Confirmation prompt for multi-app deploys
+    if len(apps) > 1 and not yes:
+        target_name = module_config.zmq_endpoint if module_config.transport == "csp" else module_config.host
+        click.echo(f"This will deploy {len(apps)} apps to {config.module_name} ({target_name}):")
+        for app_name in apps:
+            click.echo(f"  {SYMBOLS['bullet']} {app_name}")
+        if not click.confirm("Continue?"):
+            click.echo("Aborted.")
+            return
+
     history = get_history(config_dir)
 
     # CSP transport: use transport abstraction
@@ -404,11 +451,21 @@ def push(
 
                 if result.success:
                     # Compute local hash for history
-                    sha256 = hashlib.sha256()
-                    with open(local_path, "rb") as f:
-                        for chunk in iter(lambda: f.read(8192), b""):
-                            sha256.update(chunk)
-                    local_hash = sha256.hexdigest()[:8]
+                    local_hash = compute_file_hash(local_path)
+
+                    # Post-deploy health check: only check if app has a service or param
+                    if app_config.service or app_config.param:
+                        try:
+                            app_statuses = transport.get_status()
+                            app_status = app_statuses.get(app)
+                            if app_status and app_status.running:
+                                click.echo(success(f"Health check passed for {app}"))
+                            elif app_status:
+                                click.echo(warning(f"Health check: {app} is not running"))
+                            else:
+                                click.echo(warning(f"Health check: {app} not found in agent status"))
+                        except TransportError:
+                            click.echo(warning(f"Health check: status query timed out"))
 
                     history.record(DeploymentRecord(
                         module=config.module_name,
@@ -433,9 +490,11 @@ def push(
                     raise SatDeployError(result.error_message or "Deploy failed")
 
         except TransportError as e:
+            # Record failure against the app that was being deployed
+            failed_app = app if 'app' in dir() else (apps[0] if apps else "")
             history.record(DeploymentRecord(
                 module=config.module_name,
-                app=apps[0] if apps else "",
+                app=failed_app,
                 binary_hash="",
                 remote_path="",
                 action="push",
@@ -448,141 +507,89 @@ def push(
 
         return
 
-    # SSH transport: use direct SSH connection
-    target = {"host": module_config.host, "user": module_config.user}
-    click.echo(f"Connecting to {target['host']}...")
+    # SSH transport: use transport abstraction
+    apps_dict = {
+        name: {"remote": cfg.get("remote", ""), "service": cfg.get("service")}
+        for name, cfg in config.apps.items()
+    } if config.apps else {}
+    transport = get_transport(module_config, config.backup_dir, apps=apps_dict)
+    click.echo(f"Connecting to {module_config.host}...")
 
     try:
-        with SSHClient(host=target["host"], user=target["user"]) as ssh:
-            service_manager = ServiceManager(ssh)
-            deployer = Deployer(
-                ssh=ssh,
-                backup_dir=config.backup_dir,
-                max_backups=config.max_backups,
+        transport.connect()
+
+        for app in apps:
+            app_config = get_app_config_or_error(config, app)
+            local_path = os.path.expanduser(local or app_config.local) if len(apps) == 1 else os.path.expanduser(app_config.local)
+            remote_path = app_config.remote
+            service = app_config.service
+
+            services_to_manage = get_services_to_manage(config, app, service)
+
+            click.echo(f"Deploying {app}...")
+
+            result = transport.deploy(
+                app_name=app,
+                local_path=local_path,
+                remote_path=remote_path,
+                services=services_to_manage,
             )
 
-            # Deploy each app
-            for app in apps:
-                app_config = get_app_config_or_error(config, app)
-                local_path = os.path.expanduser(local or app_config.local) if len(apps) == 1 else os.path.expanduser(app_config.local)
-                remote_path = app_config.remote
-                service = app_config.service
+            if result.success:
+                local_hash = result.binary_hash or compute_file_hash(local_path)
 
-                services_to_manage = get_services_to_manage(config, app, service)
-
-                # Check if local and remote are the same - skip if already deployed
-                local_hash = deployer.compute_hash(local_path)
-                remote_hash = deployer.compute_remote_hash(remote_path)
-
-                if local_hash and remote_hash and local_hash == remote_hash:
-                    # Binary already deployed, but check if service file needs updating
+                # Sync service file if transport exposes SSH internals
+                service_hash = None
+                if hasattr(transport, 'ssh') and transport.ssh and hasattr(transport, 'service_manager'):
                     service_hash = sync_service_file(
-                        ssh, service_manager, app_config, module_config
+                        transport.ssh, transport.service_manager,
+                        app_config, module_config,
                     )
-                    # Still record in history so it becomes the "current" version
-                    history.record(DeploymentRecord(
-                        module=config.module_name,
-                        app=app,
-                        binary_hash=local_hash,
-                        remote_path=remote_path,
-                        action="push",
-                        success=True,
-                        service_hash=service_hash,
-                    ))
-                    click.echo(warning(f"{app} ({local_hash}) is already deployed. Marked as current."))
-                    continue
-
-                # Check if local version already exists in backups - restore instead of upload
-                existing_backups = deployer.list_backups(app)
-                existing_hashes = {b.get("hash"): b for b in existing_backups if b.get("hash")}
-
-                local_in_backups = local_hash in existing_hashes
-                remote_needs_backup = remote_hash and remote_hash not in existing_hashes
-
-                if local_in_backups:
-                    # Version exists in backups - restore it instead of uploading
-                    backup = existing_hashes[local_hash]
-                    backup_path = backup["path"]
-
-                    has_service_template = bool(app_config.service_template)
-                    total_steps = (1 if remote_needs_backup else 0) + 1 + (1 if has_service_template else 0) + len(services_to_manage) * 2
-                    counter = StepCounter(total_steps)
-
-                    click.echo(f"Restoring {app} from backup...")
-
-                    stop_services(service_manager, services_to_manage, counter)
-
-                    if remote_needs_backup:
-                        remote_target = f"{target['user']}@{target['host']}:{remote_path}"
-                        counter.next(f"Backing up {remote_target}")
-                        deployer.backup(app, remote_path)
-
-                    counter.next(f"Restoring {local_hash} from backup")
-                    deployer.restore(backup_path, remote_path)
-
-                    service_hash = sync_service_file(
-                        ssh, service_manager, app_config, module_config, counter
-                    )
-
-                    start_services(service_manager, services_to_manage, counter)
-
-                    history.record(DeploymentRecord(
-                        module=config.module_name,
-                        app=app,
-                        binary_hash=local_hash,
-                        remote_path=remote_path,
-                        backup_path=backup_path,
-                        action="push",
-                        success=True,
-                        service_hash=service_hash,
-                    ))
-                    click.echo(warning(f"{app} ({local_hash}) restored from backup. Marked as current."))
-                    continue
-
-                # Fresh deploy - upload new binary
-                has_service_template = bool(app_config.service_template)
-                total_steps = (1 if remote_needs_backup else 0) + 1 + (1 if has_service_template else 0) + len(services_to_manage) * 2
-                counter = StepCounter(total_steps)
-
-                click.echo(f"Deploying {app}...")
-
-                stop_services(service_manager, services_to_manage, counter)
-
-                remote_target = f"{target['user']}@{target['host']}:{remote_path}"
-                backup_path = None
-
-                if remote_needs_backup:
-                    counter.next(f"Backing up {remote_target}")
-                    backup_path = deployer.backup(app, remote_path)
-
-                counter.next(f"Uploading {local_path}")
-                click.echo(f"                {SYMBOLS['arrow']} {remote_target}")
-                deployer.deploy(local_path, remote_path)
-
-                service_hash = sync_service_file(
-                    ssh, service_manager, app_config, module_config, counter
-                )
-
-                start_services(service_manager, services_to_manage, counter)
 
                 history.record(DeploymentRecord(
                     module=config.module_name,
                     app=app,
                     binary_hash=local_hash,
                     remote_path=remote_path,
-                    backup_path=backup_path,
+                    backup_path=result.backup_path,
                     action="push",
                     success=True,
                     service_hash=service_hash,
                 ))
 
-                click.echo(success(f"Deployed {app} ({local_hash})"))
+                if result.skipped:
+                    click.echo(warning(f"{app} ({local_hash}) is already deployed. Marked as current."))
+                elif result.restored:
+                    click.echo(warning(f"{app} ({local_hash}) restored from backup. Marked as current."))
+                else:
+                    click.echo(success(f"Deployed {app} ({local_hash})"))
 
-    except SSHError as e:
-        # Log failed deployment
+                # Post-deploy health check for services
+                if service and hasattr(transport, 'service_manager') and transport.service_manager:
+                    svc_status = transport.service_manager.get_status(service)
+                    if svc_status == ServiceStatus.RUNNING:
+                        click.echo(success(f"Health check passed for {app}"))
+                    elif svc_status == ServiceStatus.FAILED:
+                        click.echo(warning(f"Health check: {app} service is in failed state"))
+                    elif not result.skipped:
+                        click.echo(warning(f"Health check: {app} is not running"))
+            else:
+                history.record(DeploymentRecord(
+                    module=config.module_name,
+                    app=app,
+                    binary_hash="",
+                    remote_path=remote_path,
+                    action="push",
+                    success=False,
+                    error_message=result.error_message,
+                ))
+                raise SatDeployError(result.error_message or "Deploy failed")
+
+    except TransportError as e:
+        failed_app = app if 'app' in dir() else (apps[0] if apps else "")
         history.record(DeploymentRecord(
             module=config.module_name,
-            app=apps[0] if apps else "",
+            app=failed_app,
             binary_hash="",
             remote_path="",
             action="push",
@@ -590,15 +597,12 @@ def push(
             error_message=str(e),
         ))
         raise SatDeployError(str(e))
+    finally:
+        transport.disconnect()
 
 
 @main.command()
-@click.option(
-    "--config-dir",
-    type=click.Path(path_type=Path),
-    default=None,
-    help="Config directory (default: ~/.satdeploy)",
-)
+@config_dir_option
 def status(config_dir: Path | None):
     """Show status of deployed apps and services."""
     config_dir = config_dir or DEFAULT_CONFIG_DIR
@@ -756,12 +760,7 @@ def status(config_dir: Path | None):
 
 @main.command("list")
 @click.argument("app")
-@click.option(
-    "--config-dir",
-    type=click.Path(path_type=Path),
-    default=None,
-    help="Config directory (default: ~/.satdeploy)",
-)
+@config_dir_option
 def list_backups(app: str, config_dir: Path | None):
     """List all versions of an app (deployed + backups).
 
@@ -931,12 +930,7 @@ def list_backups(app: str, config_dir: Path | None):
 @main.command()
 @click.argument("app")
 @click.argument("hash", required=False, default=None)
-@click.option(
-    "--config-dir",
-    type=click.Path(path_type=Path),
-    default=None,
-    help="Config directory (default: ~/.satdeploy)",
-)
+@config_dir_option
 def rollback(app: str, hash: str | None, config_dir: Path | None):  # noqa: A002
     """Rollback to a previous version.
 
@@ -975,10 +969,12 @@ def rollback(app: str, hash: str | None, config_dir: Path | None):  # noqa: A002
             )
 
             if result.success:
+                # Use the actual backup hash from the response if available
+                actual_hash = target_hash or (result.backup_path or "").split("-")[-1].replace(".bak", "") or ""
                 history.record(DeploymentRecord(
                     module=config.module_name,
                     app=app,
-                    binary_hash=target_hash or "previous",
+                    binary_hash=actual_hash,
                     remote_path=remote_path,
                     action="rollback",
                     success=True,
@@ -1133,6 +1129,55 @@ def rollback(app: str, hash: str | None, config_dir: Path | None):  # noqa: A002
 
 
 @main.command()
+@config_dir_option
+def config(config_dir: Path | None):
+    """Show current configuration."""
+    config_dir = config_dir or DEFAULT_CONFIG_DIR
+    cfg = Config(config_dir=config_dir)
+
+    if cfg.load() is None:
+        raise SatDeployError(
+            f"Config not found at {cfg.config_path}. Run 'satdeploy init' first."
+        )
+
+    click.echo(click.style(f"Config: {cfg.config_path}", bold=True))
+    click.echo("")
+
+    module = cfg.get_target()
+    click.echo(f"  name:        {module.name}")
+    click.echo(f"  transport:   {module.transport}")
+
+    if module.transport == "ssh":
+        click.echo(f"  host:        {module.host}")
+        click.echo(f"  user:        {module.user}")
+    elif module.transport == "csp":
+        click.echo(f"  zmq_endpoint: {module.zmq_endpoint}")
+        click.echo(f"  agent_node:  {module.agent_node}")
+        click.echo(f"  ground_node: {module.ground_node}")
+        if module.appsys_node:
+            click.echo(f"  appsys_node: {module.appsys_node}")
+
+    click.echo(f"  backup_dir:  {cfg.backup_dir}")
+    click.echo(f"  max_backups: {cfg.max_backups}")
+    click.echo("")
+
+    apps = cfg.apps
+    if not apps:
+        click.echo("Apps: (none)")
+        return
+
+    click.echo(f"Apps ({len(apps)}):")
+    for app_name, app_data in apps.items():
+        click.echo(f"  {app_name}:")
+        click.echo(f"    local:   {app_data.get('local', '-')}")
+        click.echo(f"    remote:  {app_data.get('remote', '-')}")
+        if app_data.get("service"):
+            click.echo(f"    service: {app_data['service']}")
+        if app_data.get("param"):
+            click.echo(f"    param:   {app_data['param']}")
+
+
+@main.command()
 @click.argument("app")
 @click.option(
     "--lines",
@@ -1141,12 +1186,7 @@ def rollback(app: str, hash: str | None, config_dir: Path | None):  # noqa: A002
     default=100,
     help="Number of lines to show (default: 100)",
 )
-@click.option(
-    "--config-dir",
-    type=click.Path(path_type=Path),
-    default=None,
-    help="Config directory (default: ~/.satdeploy)",
-)
+@config_dir_option
 def logs(app: str, lines: int, config_dir: Path | None):
     """Show logs for an app's service.
 
@@ -1169,10 +1209,15 @@ def logs(app: str, lines: int, config_dir: Path | None):
         )
 
     module_config = config.get_target()
-    target = {"host": module_config.host, "user": module_config.user}
+
+    if module_config.transport == "csp":
+        raise SatDeployError(
+            "Logs are not available over CSP transport. "
+            "Use your ground station shell to access logs."
+        )
 
     try:
-        with SSHClient(host=target["host"], user=target["user"]) as ssh:
+        with SSHClient(host=module_config.host, user=module_config.user) as ssh:
             service_manager = ServiceManager(ssh)
             click.echo(click.style(f"Logs for {app} ({service}):", bold=True))
             click.echo("")
@@ -1183,3 +1228,38 @@ def logs(app: str, lines: int, config_dir: Path | None):
         raise SatDeployError(str(e))
 
 
+@main.group(cls=ColoredGroup)
+def demo():
+    """Manage the demo environment (simulated satellite)."""
+    pass
+
+
+@demo.command()
+def start():
+    """Start a simulated satellite for trying satdeploy."""
+    demo_module.demo_start()
+
+
+@demo.command()
+@click.option("--clean", is_flag=True, help="Remove demo config directory")
+def stop(clean: bool):
+    """Stop the demo environment."""
+    demo_module.demo_stop(clean=clean)
+
+
+@demo.command("status")
+def demo_status_cmd():
+    """Show demo environment status."""
+    demo_module.demo_status()
+
+
+@demo.command()
+def watch():
+    """Stream the satellite agent's logs in real time."""
+    demo_module.demo_watch()
+
+
+@demo.command()
+def eject():
+    """Generate a real config template for your hardware."""
+    demo_module.demo_eject()

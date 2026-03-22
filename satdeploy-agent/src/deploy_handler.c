@@ -509,16 +509,25 @@ static void handle_rollback(const Satdeploy__DeployRequest *req,
         return;
     }
 
-    if (!req->remote_path || !req->remote_path[0]) {
-        resp->success = 0;
-        resp->error_code = SATDEPLOY__DEPLOY_ERROR__ERR_APP_NOT_FOUND;
-        resp->error_message = "No remote_path specified";
-        return;
+    /* Look up remote_path: use request field if provided, else check metadata */
+    const char *remote_path = req->remote_path;
+    static char meta_remote_path[MAX_PATH_LEN];
+    if (!remote_path || !remote_path[0]) {
+        if (app_metadata_get(req->app_name, meta_remote_path, sizeof(meta_remote_path),
+                             NULL, 0, NULL, 0) == 0 && meta_remote_path[0]) {
+            remote_path = meta_remote_path;
+            printf("[deploy] Resolved remote_path from metadata: %s\n", remote_path);
+        } else {
+            resp->success = 0;
+            resp->error_code = SATDEPLOY__DEPLOY_ERROR__ERR_APP_NOT_FOUND;
+            resp->error_message = "No remote_path specified and app not in metadata";
+            return;
+        }
     }
 
     /* Get current deployed hash */
     char current_hash[16] = {0};
-    compute_file_checksum(req->remote_path, current_hash, sizeof(current_hash));
+    compute_file_checksum(remote_path, current_hash, sizeof(current_hash));
     printf("[deploy] Current deployed hash: %s\n", current_hash[0] ? current_hash : "(none)");
 
     /* Collect all backups (single filesystem traversal) */
@@ -595,7 +604,7 @@ static void handle_rollback(const Satdeploy__DeployRequest *req,
                current_hash, current_idx, next_idx, selected->hash);
     }
 
-    printf("[deploy] Restoring backup: %s -> %s\n", selected->path, req->remote_path);
+    printf("[deploy] Restoring backup: %s -> %s\n", selected->path, remote_path);
 
     /* Backup current version if not already in backups (check in-memory, no second traversal) */
     if (current_hash[0]) {
@@ -609,7 +618,7 @@ static void handle_rollback(const Satdeploy__DeployRequest *req,
 
         if (!current_in_backups) {
             char backup_path[MAX_PATH_LEN];
-            if (backup_create(req->app_name, req->remote_path, backup_path, sizeof(backup_path)) == 0) {
+            if (backup_create(req->app_name, remote_path, backup_path, sizeof(backup_path)) == 0) {
                 printf("[deploy] Backed up current version (%s) to: %s\n", current_hash, backup_path);
             }
         } else {
@@ -618,7 +627,7 @@ static void handle_rollback(const Satdeploy__DeployRequest *req,
     }
 
     /* Restore the backup */
-    if (backup_restore(selected->path, req->remote_path) != 0) {
+    if (backup_restore(selected->path, remote_path) != 0) {
         resp->success = 0;
         resp->error_code = SATDEPLOY__DEPLOY_ERROR__ERR_RESTORE_FAILED;
         resp->error_message = "Failed to restore backup";
@@ -626,7 +635,7 @@ static void handle_rollback(const Satdeploy__DeployRequest *req,
     }
 
     /* Update metadata - trust the hash we already know, don't recompute */
-    app_metadata_save(req->app_name, req->remote_path, selected->hash);
+    app_metadata_save(req->app_name, remote_path, selected->hash);
     printf("[deploy] Updated metadata: %s -> %s\n", req->app_name, selected->hash);
 
     /* Return the backup path that was restored */
@@ -751,6 +760,12 @@ static void handle_deploy(const Satdeploy__DeployRequest *req,
 
     /* Create backup of newly deployed version to preserve deploy timestamp */
     backup_create(req->app_name, req->remote_path, NULL, 0);
+
+    /* Save app metadata for status/list queries */
+    if (app_metadata_save(req->app_name, req->remote_path,
+                          req->expected_checksum) != 0) {
+        printf("[deploy] Warning: Failed to save app metadata\n");
+    }
 
     /* Step 6: TODO - Start app via libparam
        For now, we skip this step */
