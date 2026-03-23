@@ -268,6 +268,39 @@ class TestCSPTransportDeploy:
         mock_dtp.return_value.start.assert_called_once()
         mock_dtp.return_value.stop.assert_called_once()
 
+    def test_deploy_sets_file_mode(self, mock_zmq, mock_dtp, tmp_path):
+        """deploy() sets file_mode from source file in the CSP request."""
+        binary = tmp_path / "test_app"
+        binary.write_bytes(b"test binary content")
+        binary.chmod(0o644)
+
+        response = DeployResponse()
+        response.success = True
+        mock_zmq._sub.recv.return_value = make_csp_response(response)
+
+        transport = CSPTransport(
+            zmq_endpoint="tcp://localhost:6000",
+            agent_node=5424,
+            ground_node=40,
+            backup_dir="/backups",
+        )
+        transport.connect()
+
+        result = transport.deploy(
+            app_name="dipp",
+            local_path=str(binary),
+            remote_path="/usr/bin/dipp",
+        )
+
+        assert result.success is True
+        # Verify the sent packet contains file_mode
+        sent_data = mock_zmq._pub.send.call_args[0][0]
+        # Parse the protobuf payload (skip 6-byte CSP header)
+        request = DeployRequest()
+        request.ParseFromString(sent_data[CSP_HEADER_SIZE:])
+        import os, stat
+        assert request.file_mode == stat.S_IMODE(os.stat(str(binary)).st_mode)
+
     def test_deploy_handles_failure(self, mock_zmq, mock_dtp, tmp_path):
         """deploy() handles agent failure response."""
         binary = tmp_path / "test_app"
@@ -331,7 +364,7 @@ class TestCSPTransportStatus:
         app_status = response.apps.add()
         app_status.app_name = "dipp"
         app_status.running = True
-        app_status.binary_hash = "abc12345"
+        app_status.file_hash = "abc12345"
         app_status.remote_path = "/usr/bin/dipp"
         mock_zmq._sub.recv.return_value = make_csp_response(response)
 
@@ -347,7 +380,7 @@ class TestCSPTransportStatus:
 
         assert "dipp" in status
         assert status["dipp"].running is True
-        assert status["dipp"].binary_hash == "abc12345"
+        assert status["dipp"].file_hash == "abc12345"
 
 
 class TestCSPTransportListBackups:
@@ -376,7 +409,7 @@ class TestCSPTransportListBackups:
 
         assert len(backups) == 1
         assert isinstance(backups[0], BackupInfo)
-        assert backups[0].binary_hash == "abc12345"
+        assert backups[0].file_hash == "abc12345"
 
 
 class TestCSPTransportLogs:

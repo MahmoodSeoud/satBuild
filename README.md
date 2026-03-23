@@ -1,6 +1,6 @@
 # satdeploy
 
-Deploy binaries to embedded Linux targets with versioned backups, dependency-aware service restarts, and one-command rollback.
+Deploy files to embedded Linux targets with versioned backups, dependency-aware service restarts, and one-command rollback.
 
 ## Try it in 60 seconds
 
@@ -19,7 +19,7 @@ This starts a simulated satellite with Docker, configures a test app, and prints
 
 ```bash
 satdeploy status              # See what's deployed
-satdeploy push test_app       # Deploy a binary
+satdeploy push test_app       # Deploy a file
 satdeploy list test_app       # See version history
 satdeploy rollback test_app   # Roll back
 satdeploy logs test_app       # View service logs
@@ -31,11 +31,11 @@ Docker is only used for the demo simulator. Real deployments use SSH or CSP dire
 
 ## Why
 
-Deploying binaries to embedded targets during development is tedious. You're either using a janky uploader, a USB stick, or SSH + prayer. No versioning, no rollback, no dependency awareness.
+Deploying files to embedded targets during development is tedious. You're either using a janky uploader, a USB stick, or SSH + prayer. No versioning, no rollback, no dependency awareness.
 
 satdeploy fixes this with:
-- **Versioned backups** - Every deploy saves the previous binary with its content hash
-- **Git provenance** - Every deploy records the git commit that built the binary
+- **Versioned backups** - Every deploy saves the previous file with its content hash
+- **Git provenance** - Every deploy records the git commit that built the file
 - **Dependency ordering** - Services stop/start in the right order
 - **One-command rollback** - Instantly restore any previous version
 - **Multi-transport** - Works over SSH or CSP (satellite links)
@@ -62,7 +62,7 @@ pip install -e .
 
 | Command | Description |
 |---------|-------------|
-| `satdeploy push <app>` | Deploy binary |
+| `satdeploy push <app>` | Deploy file |
 | `satdeploy push --all` | Deploy all apps |
 | `satdeploy push --require-clean` | Refuse to deploy from dirty git tree |
 | `satdeploy status` | Show app statuses with git provenance |
@@ -151,7 +151,7 @@ apps:
 
 | Field | Description |
 |-------|-------------|
-| `local` | Path to local binary |
+| `local` | Path to local file |
 | `remote` | Deployment path on target |
 | `service` | systemd service (null for libraries) |
 | `depends_on` | Services this app depends on |
@@ -188,7 +188,7 @@ ground_node: 40
 When deploying an app with dependencies:
 
 1. **Stop** services top-down (dependents first)
-2. **Deploy** the binary
+2. **Deploy** the file
 3. **Start** services bottom-up (dependencies first)
 
 Example: `controller` depends on `csp_server`:

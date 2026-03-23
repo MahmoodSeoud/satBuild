@@ -18,7 +18,7 @@ standard choice for embedded C testing.
 
 **What:** Add pytest tests for `satdeploy/csp/dtp_server.py`.
 
-**Why:** The DTP server handles ground-to-satellite binary transfer. It's the only
+**Why:** The DTP server handles ground-to-satellite file transfer. It's the only
 Python module with zero test coverage. A bug here means failed deploys over CSP.
 
 **Context:** dtp_server.py is 244 lines. Key behaviors to test: metadata request
@@ -35,7 +35,7 @@ All mockable with pytest-mock (mock ZMQ sockets and threading).
 asset for cold outreach. A satellite engineer watching this gets more conviction in 2 minutes than
 reading any README. Do after first 3 outreach conversations to learn what to emphasize.
 
-**Context:** Record on the DISCO-2 FlatSat. Show: (1) `satdeploy push` deploying a binary over CSP,
+**Context:** Record on the DISCO-2 FlatSat. Show: (1) `satdeploy push` deploying a file over CSP,
 (2) `satdeploy status` showing the new version, (3) `satdeploy rollback` restoring the previous
 version. Keep it under 2 minutes, no narration needed — terminal output is compelling enough.
 
@@ -51,10 +51,10 @@ version. Keep it under 2 minutes, no narration needed — terminal output is com
 over CSP. Add concrete numbers to README.
 
 **Why:** Satellite engineers think in link budgets and pass windows. Concrete numbers (e.g., "2MB
-binary in 45s over 9600 baud, rollback in 3s") speak their language and make the positioning
+file in 45s over 9600 baud, rollback in 3s") speak their language and make the positioning
 tangible. Abstract feature lists don't convert.
 
-**Context:** Run on DISCO-2 FlatSat. Measure: deploy time for various binary sizes (500KB, 1MB, 2MB,
+**Context:** Run on DISCO-2 FlatSat. Measure: deploy time for various file sizes (500KB, 1MB, 2MB,
 5MB), rollback time, bandwidth utilization. Present as a table in the README under a "Performance"
 section.
 

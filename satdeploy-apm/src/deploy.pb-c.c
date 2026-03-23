@@ -187,7 +187,7 @@ void   satdeploy__deploy_response__free_unpacked
   assert(message->base.descriptor == &satdeploy__deploy_response__descriptor);
   protobuf_c_message_free_unpacked ((ProtobufCMessage*)message, allocator);
 }
-static const ProtobufCFieldDescriptor satdeploy__deploy_request__field_descriptors[16] =
+static const ProtobufCFieldDescriptor satdeploy__deploy_request__field_descriptors[17] =
 {
   {
     "command",
@@ -381,6 +381,18 @@ static const ProtobufCFieldDescriptor satdeploy__deploy_request__field_descripto
     0,             /* flags */
     0,NULL,NULL    /* reserved1,reserved2, etc */
   },
+  {
+    "file_mode",
+    17,
+    PROTOBUF_C_LABEL_NONE,
+    PROTOBUF_C_TYPE_UINT32,
+    0,   /* quantifier_offset */
+    offsetof(Satdeploy__DeployRequest, file_mode),
+    NULL,
+    NULL,
+    0,             /* flags */
+    0,NULL,NULL    /* reserved1,reserved2, etc */
+  },
 };
 static const unsigned satdeploy__deploy_request__field_indices_by_name[] = {
   1,   /* field[1] = app_name */
@@ -392,6 +404,7 @@ static const unsigned satdeploy__deploy_request__field_indices_by_name[] = {
   7,   /* field[7] = dtp_server_port */
   10,   /* field[10] = expected_checksum */
   9,   /* field[9] = expected_size */
+  16,   /* field[16] = file_mode */
   15,   /* field[15] = log_lines */
   2,   /* field[2] = param_name */
   8,   /* field[8] = payload_id */
@@ -403,7 +416,7 @@ static const unsigned satdeploy__deploy_request__field_indices_by_name[] = {
 static const ProtobufCIntRange satdeploy__deploy_request__number_ranges[1 + 1] =
 {
   { 1, 0 },
-  { 0, 16 }
+  { 0, 17 }
 };
 const ProtobufCMessageDescriptor satdeploy__deploy_request__descriptor =
 {
@@ -413,7 +426,7 @@ const ProtobufCMessageDescriptor satdeploy__deploy_request__descriptor =
   "Satdeploy__DeployRequest",
   "satdeploy",
   sizeof(Satdeploy__DeployRequest),
-  16,
+  17,
   satdeploy__deploy_request__field_descriptors,
   satdeploy__deploy_request__field_indices_by_name,
   1,  satdeploy__deploy_request__number_ranges,
@@ -524,12 +537,12 @@ static const ProtobufCFieldDescriptor satdeploy__app_status_entry__field_descrip
     0,NULL,NULL    /* reserved1,reserved2, etc */
   },
   {
-    "binary_hash",
+    "file_hash",
     3,
     PROTOBUF_C_LABEL_NONE,
     PROTOBUF_C_TYPE_STRING,
     0,   /* quantifier_offset */
-    offsetof(Satdeploy__AppStatusEntry, binary_hash),
+    offsetof(Satdeploy__AppStatusEntry, file_hash),
     NULL,
     &protobuf_c_empty_string,
     0,             /* flags */
@@ -550,7 +563,7 @@ static const ProtobufCFieldDescriptor satdeploy__app_status_entry__field_descrip
 };
 static const unsigned satdeploy__app_status_entry__field_indices_by_name[] = {
   0,   /* field[0] = app_name */
-  2,   /* field[2] = binary_hash */
+  2,   /* field[2] = file_hash */
   3,   /* field[3] = remote_path */
   1,   /* field[1] = running */
 };

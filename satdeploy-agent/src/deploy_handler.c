@@ -48,6 +48,7 @@ typedef struct {
     uint32_t received_size;
     uint32_t next_chunk;
     uint32_t total_chunks;
+    uint32_t file_mode;
     FILE *temp_file;
 } upload_session_t;
 
@@ -198,10 +199,10 @@ typedef struct {
 
 /* Callback for app_metadata_list */
 static void status_metadata_callback(const char *app_name, const char *remote_path,
-                                     const char *binary_hash, const char *deployed_at,
+                                     const char *file_hash, const char *deployed_at,
                                      void *user_data) {
     (void)deployed_at;
-    (void)binary_hash;
+    (void)file_hash;
     status_context_t *ctx = (status_context_t *)user_data;
 
     if (ctx->count >= ctx->max) return;
@@ -218,8 +219,8 @@ static void status_metadata_callback(const char *app_name, const char *remote_pa
     satdeploy__app_status_entry__init(app);
     app->app_name = strdup(app_name);
     app->remote_path = strdup(remote_path);
-    app->binary_hash = hash_buf[ctx->count];
-    /* Check if process is running by matching the binary path.
+    app->file_hash = hash_buf[ctx->count];
+    /* Check if process is running by matching the file path.
        Use [/] trick to prevent pgrep from matching itself. */
     char cmd[320];
     snprintf(cmd, sizeof(cmd), "pgrep -f '[/]%s' > /dev/null 2>&1", remote_path + 1);
@@ -390,12 +391,12 @@ static void handle_list_versions(const Satdeploy__DeployRequest *req,
     int result = backup_list(req->app_name, backup_collect_callback, &col);
 
     /* Get currently deployed version */
-    char remote_path[MAX_PATH_LEN], binary_hash[16], deployed_at[32];
+    char remote_path[MAX_PATH_LEN], file_hash[16], deployed_at[32];
     char actual_hash[16] = {0};
     int have_current = 0;
 
     if (app_metadata_get(req->app_name, remote_path, sizeof(remote_path),
-                         binary_hash, sizeof(binary_hash),
+                         file_hash, sizeof(file_hash),
                          deployed_at, sizeof(deployed_at)) == 0) {
         /* Verify file actually exists */
         if (compute_file_checksum(remote_path, actual_hash, sizeof(actual_hash)) == 0) {
@@ -683,7 +684,7 @@ static void handle_deploy(const Satdeploy__DeployRequest *req,
 
     /* TODO: Stop app via libparam if running */
 
-    /* Step 2: Backup current binary if it exists */
+    /* Step 2: Backup current file if it exists */
     static char backup_path_buf[MAX_PATH_LEN];
     backup_path_buf[0] = '\0';
 
@@ -692,12 +693,12 @@ static void handle_deploy(const Satdeploy__DeployRequest *req,
                           backup_path_buf, sizeof(backup_path_buf)) != 0) {
             resp->success = 0;
             resp->error_code = SATDEPLOY__DEPLOY_ERROR__ERR_BACKUP_FAILED;
-            resp->error_message = "Failed to backup current binary";
+            resp->error_message = "Failed to backup current file";
             return;
         }
     }
 
-    /* Download new binary via DTP */
+    /* Download new file via DTP */
 
     /* Download to a temp file first */
     char temp_path[MAX_PATH_LEN];
@@ -736,17 +737,18 @@ static void handle_deploy(const Satdeploy__DeployRequest *req,
         fflush(stdout);
     }
 
-    /* Install binary (move temp to final location) */
+    /* Install file (move temp to final location) */
     if (rename(temp_path, req->remote_path) != 0) {
         resp->success = 0;
         resp->error_code = SATDEPLOY__DEPLOY_ERROR__ERR_INSTALL_FAILED;
-        resp->error_message = "Failed to install binary";
+        resp->error_message = "Failed to install file";
         unlink(temp_path);
         return;
     }
 
-    /* Make executable */
-    chmod(req->remote_path, 0755);
+    /* Apply file permissions (default to 0755 if not specified) */
+    mode_t mode = req->file_mode ? (mode_t)req->file_mode : 0755;
+    chmod(req->remote_path, mode);
 
     /* Create backup of newly deployed version to preserve deploy timestamp */
     backup_create(req->app_name, req->remote_path, NULL, 0);
@@ -825,6 +827,7 @@ static void handle_upload_start(const Satdeploy__DeployRequest *req,
     }
     upload_session.expected_size = req->expected_size;
     upload_session.total_chunks = req->total_chunks;
+    upload_session.file_mode = req->file_mode;
     upload_session.received_size = 0;
     upload_session.next_chunk = 0;
 
@@ -942,7 +945,7 @@ static void handle_upload_end(const Satdeploy__DeployRequest *req,
         printf("[deploy] Checksum verified: %s\n", actual_checksum);
     }
 
-    /* Backup existing binary if present */
+    /* Backup existing file if present */
     static char backup_path_buf[MAX_PATH_LEN];
     backup_path_buf[0] = '\0';
 
@@ -953,7 +956,7 @@ static void handle_upload_end(const Satdeploy__DeployRequest *req,
             upload_session_reset();
             resp->success = 0;
             resp->error_code = SATDEPLOY__DEPLOY_ERROR__ERR_BACKUP_FAILED;
-            resp->error_message = "Failed to backup current binary";
+            resp->error_message = "Failed to backup current file";
             return;
         }
         printf("[deploy] Backup created: %s\n", backup_path_buf);
@@ -969,19 +972,20 @@ static void handle_upload_end(const Satdeploy__DeployRequest *req,
         return;
     }
 
-    /* Install binary (copy temp to final location, handles cross-filesystem) */
-    printf("[deploy] Installing binary to %s\n", upload_session.remote_path);
+    /* Install file (copy temp to final location, handles cross-filesystem) */
+    printf("[deploy] Installing file to %s\n", upload_session.remote_path);
     if (copy_file(upload_session.temp_path, upload_session.remote_path) != 0) {
         upload_session_reset();
         resp->success = 0;
         resp->error_code = SATDEPLOY__DEPLOY_ERROR__ERR_INSTALL_FAILED;
-        resp->error_message = "Failed to install binary";
+        resp->error_message = "Failed to install file";
         return;
     }
     unlink(upload_session.temp_path);  /* Clean up temp file */
 
-    /* Make executable */
-    chmod(upload_session.remote_path, 0755);
+    /* Apply file permissions (default to 0755 if not specified) */
+    mode_t mode = upload_session.file_mode ? (mode_t)upload_session.file_mode : 0755;
+    chmod(upload_session.remote_path, mode);
 
     /* Create backup of newly deployed version to preserve deploy timestamp */
     backup_create(upload_session.app_name, upload_session.remote_path, NULL, 0);

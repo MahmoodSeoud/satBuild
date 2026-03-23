@@ -2,7 +2,7 @@
  * satdeploy-agent - Satellite-side deployment agent
  *
  * Receives deployment commands from ground via CSP and manages
- * binary deployments, backups, and rollbacks.
+ * file deployments, backups, and rollbacks.
  */
 
 #include <stdio.h>

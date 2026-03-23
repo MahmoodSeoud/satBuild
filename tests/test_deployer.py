@@ -172,8 +172,48 @@ class TestDeploy:
             str(binary), "/opt/disco/bin/controller"
         )
 
-    def test_deploy_makes_binary_executable(self, tmp_path):
-        """Should chmod +x the deployed binary."""
+    def test_deploy_preserves_file_permissions(self, tmp_path):
+        """Should chmod with the provided file mode instead of hardcoding +x."""
+        mock_ssh = Mock()
+        mock_ssh.run.return_value = Mock(exit_code=0)
+        mock_ssh.file_exists.return_value = False
+
+        binary = tmp_path / "controller"
+        binary.write_bytes(b"binary content")
+
+        deployer = Deployer(
+            ssh=mock_ssh,
+            backup_dir="/opt/satdeploy/backups",
+            max_backups=10,
+        )
+        deployer.deploy(str(binary), "/opt/disco/bin/controller", file_mode=0o755)
+
+        chmod_calls = [c for c in mock_ssh.run.call_args_list if "chmod" in str(c)]
+        assert len(chmod_calls) > 0
+        assert "755" in str(chmod_calls[-1])
+
+    def test_deploy_with_non_executable_mode(self, tmp_path):
+        """Should apply non-executable permissions like 644 for libraries."""
+        mock_ssh = Mock()
+        mock_ssh.run.return_value = Mock(exit_code=0)
+        mock_ssh.file_exists.return_value = False
+
+        binary = tmp_path / "libparam.so"
+        binary.write_bytes(b"library content")
+
+        deployer = Deployer(
+            ssh=mock_ssh,
+            backup_dir="/opt/satdeploy/backups",
+            max_backups=10,
+        )
+        deployer.deploy(str(binary), "/usr/lib/libparam.so", file_mode=0o644)
+
+        chmod_calls = [c for c in mock_ssh.run.call_args_list if "chmod" in str(c)]
+        assert len(chmod_calls) > 0
+        assert "644" in str(chmod_calls[-1])
+
+    def test_deploy_defaults_to_755(self, tmp_path):
+        """Should default to 755 when no file_mode is provided."""
         mock_ssh = Mock()
         mock_ssh.run.return_value = Mock(exit_code=0)
         mock_ssh.file_exists.return_value = False
@@ -190,7 +230,7 @@ class TestDeploy:
 
         chmod_calls = [c for c in mock_ssh.run.call_args_list if "chmod" in str(c)]
         assert len(chmod_calls) > 0
-        assert "+x" in str(chmod_calls[-1])
+        assert "755" in str(chmod_calls[-1])
 
 
 class TestListBackups:
@@ -376,8 +416,8 @@ class TestUploadService:
 class TestRestore:
     """Test restoring from backup."""
 
-    def test_restore_copies_backup_to_remote_path(self):
-        """Should copy backup file to remote path."""
+    def test_restore_copies_backup_preserving_permissions(self):
+        """Should copy backup file to remote path with cp -p to preserve permissions."""
         mock_ssh = Mock()
         mock_ssh.run.return_value = Mock(exit_code=0)
 
@@ -393,11 +433,13 @@ class TestRestore:
         )
 
         run_calls = [str(c) for c in mock_ssh.run.call_args_list]
-        # Should copy the backup to remote path
-        assert any("cp" in call and "abc12345.bak" in call and "/opt/disco/bin/controller" in call for call in run_calls)
+        # Should use cp -p to preserve permissions
+        assert any("cp -p" in call and "abc12345.bak" in call and "/opt/disco/bin/controller" in call for call in run_calls)
+        # Should NOT call chmod separately
+        assert not any("chmod" in call for call in run_calls)
 
-    def test_restore_makes_binary_executable(self):
-        """Should chmod +x the restored binary."""
+    def test_restore_uses_single_command(self):
+        """Restore should issue exactly one ssh command (cp -p), not cp + chmod."""
         mock_ssh = Mock()
         mock_ssh.run.return_value = Mock(exit_code=0)
 
@@ -412,6 +454,4 @@ class TestRestore:
             remote_path="/opt/disco/bin/controller",
         )
 
-        run_calls = [str(c) for c in mock_ssh.run.call_args_list]
-        # Should chmod +x
-        assert any("chmod +x" in call and "/opt/disco/bin/controller" in call for call in run_calls)
+        assert mock_ssh.run.call_count == 1

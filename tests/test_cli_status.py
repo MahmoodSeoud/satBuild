@@ -354,7 +354,7 @@ class TestStatusPolishedOutput:
         history.record(DeploymentRecord(
             module="som1",
             app="controller",
-            binary_hash="a3f2c9b1",
+            file_hash="a3f2c9b1",
             remote_path="/opt/disco/bin/controller",
             backup_path="/opt/satdeploy/backups/controller/20240115-143022-a3f2c9b1.bak",
             action="push",

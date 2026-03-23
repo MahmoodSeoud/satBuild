@@ -1,5 +1,6 @@
 """Tests for the SSH transport implementation."""
 
+import os
 from unittest.mock import MagicMock, patch
 import pytest
 
@@ -110,6 +111,36 @@ class TestSSHTransportDeploy:
         assert result.backup_path == "/backups/app/20250115-abc12345.bak"
         mock_deployer.backup.assert_called_once()
         mock_deployer.deploy.assert_called_once()
+
+    @patch("satdeploy.transport.ssh.SSHClient")
+    @patch("satdeploy.transport.ssh.Deployer")
+    @patch("satdeploy.transport.ssh.ServiceManager")
+    def test_deploy_passes_file_mode(self, mock_svc_class, mock_deployer_class, mock_ssh_class, tmp_path):
+        """deploy() reads source file permissions and passes file_mode to deployer."""
+        binary = tmp_path / "test_app"
+        binary.write_bytes(b"test binary content")
+        binary.chmod(0o644)
+
+        mock_deployer = mock_deployer_class.return_value
+        mock_deployer.compute_remote_hash.return_value = None
+        mock_deployer.list_backups.return_value = []
+        mock_deployer.backup.return_value = None
+
+        transport = SSHTransport("192.168.1.50", "root", "/backups")
+        transport.connect()
+
+        result = transport.deploy(
+            app_name="test_app",
+            local_path=str(binary),
+            remote_path="/usr/bin/test_app",
+        )
+
+        assert result.success is True
+        # Verify file_mode kwarg was passed to deployer.deploy
+        deploy_call = mock_deployer.deploy.call_args
+        assert "file_mode" in deploy_call.kwargs
+        import stat
+        assert deploy_call.kwargs["file_mode"] == stat.S_IMODE(os.stat(str(binary)).st_mode)
 
     @patch("satdeploy.transport.ssh.SSHClient")
     @patch("satdeploy.transport.ssh.Deployer")
@@ -242,7 +273,7 @@ class TestSSHTransportStatus:
 
         assert "dipp" in status
         assert status["dipp"].running is True
-        assert status["dipp"].binary_hash == "abc12345"
+        assert status["dipp"].file_hash == "abc12345"
 
 
 class TestSSHTransportListBackups:
@@ -265,7 +296,7 @@ class TestSSHTransportListBackups:
 
         assert len(backups) == 1
         assert isinstance(backups[0], BackupInfo)
-        assert backups[0].binary_hash == "abc12345"
+        assert backups[0].file_hash == "abc12345"
 
 
 class TestSSHTransportLogs:

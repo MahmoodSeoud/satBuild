@@ -1,5 +1,7 @@
 """SSH transport implementation."""
 
+import os
+import stat
 from typing import Optional
 
 from satdeploy.deployer import Deployer
@@ -96,15 +98,15 @@ class SSHTransport(Transport):
         expected_checksum: Optional[str] = None,
         services: Optional[list[tuple[str, str]]] = None,
     ) -> DeployResult:
-        """Deploy a binary via SSH/SFTP.
+        """Deploy a file via SSH/SFTP.
 
-        Handles hash-skip (skip if same binary already deployed) and
+        Handles hash-skip (skip if same file already deployed) and
         backup-restore (restore from existing backup instead of uploading).
 
         Args:
             app_name: Name of the application.
-            local_path: Path to the local binary.
-            remote_path: Path on the target where binary should be installed.
+            local_path: Path to the local file.
+            remote_path: Path on the target where file should be installed.
             param_name: Ignored for SSH transport.
             appsys_node: Ignored for SSH transport.
             run_node: Ignored for SSH transport.
@@ -125,11 +127,11 @@ class SSHTransport(Transport):
             local_hash = compute_file_hash(local_path)
             remote_hash = self._deployer.compute_remote_hash(remote_path)
 
-            # Hash-skip: same binary already deployed
+            # Hash-skip: same file already deployed
             if local_hash and remote_hash and local_hash == remote_hash:
                 return DeployResult(
                     success=True,
-                    binary_hash=local_hash,
+                    file_hash=local_hash,
                     skipped=True,
                 )
 
@@ -164,7 +166,7 @@ class SSHTransport(Transport):
                     return DeployResult(
                         success=True,
                         backup_path=backup_path,
-                        binary_hash=local_hash,
+                        file_hash=local_hash,
                         restored=True,
                     )
 
@@ -173,14 +175,15 @@ class SSHTransport(Transport):
                 if remote_needs_backup:
                     backup_path = self._deployer.backup(app_name, remote_path)
 
-                self._deployer.deploy(local_path, remote_path)
+                file_mode = stat.S_IMODE(os.stat(local_path).st_mode)
+                self._deployer.deploy(local_path, remote_path, file_mode=file_mode)
 
                 # Verify checksum if provided
                 if expected_checksum:
                     actual = self._deployer.compute_remote_hash(remote_path)
                     if actual != expected_checksum:
                         # Restore backup before returning failure so services
-                        # don't restart with a corrupt binary
+                        # don't restart with a corrupt file
                         if backup_path:
                             self._deployer.restore(backup_path, remote_path)
                         return DeployResult(
@@ -190,13 +193,13 @@ class SSHTransport(Transport):
                                 f"{expected_checksum}, got {actual}"
                             ),
                             backup_path=backup_path,
-                            binary_hash=local_hash,
+                            file_hash=local_hash,
                         )
 
                 return DeployResult(
                     success=True,
                     backup_path=backup_path,
-                    binary_hash=local_hash,
+                    file_hash=local_hash,
                 )
 
             finally:
@@ -293,10 +296,10 @@ class SSHTransport(Transport):
             remote_path = config.get("remote", "")
             service = config.get("service")
 
-            # Check if binary exists and get its hash
-            binary_hash = None
+            # Check if file exists and get its hash
+            file_hash = None
             if self._ssh.file_exists(remote_path):
-                binary_hash = self._deployer.compute_remote_hash(remote_path)
+                file_hash = self._deployer.compute_remote_hash(remote_path)
 
             # Check if service is running
             running = False
@@ -307,7 +310,7 @@ class SSHTransport(Transport):
             result[app_name] = AppStatus(
                 app_name=app_name,
                 running=running,
-                binary_hash=binary_hash,
+                file_hash=file_hash,
                 remote_path=remote_path,
             )
 
@@ -330,7 +333,7 @@ class SSHTransport(Transport):
             BackupInfo(
                 version=b["version"],
                 timestamp=b["timestamp"],
-                binary_hash=b.get("hash"),
+                file_hash=b.get("hash"),
                 path=b["path"],
             )
             for b in backups

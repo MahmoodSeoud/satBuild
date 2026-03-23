@@ -93,12 +93,12 @@ class TestAppStatus:
         status = AppStatus(
             app_name="dipp",
             running=True,
-            binary_hash="a1b2c3d4",
+            file_hash="a1b2c3d4",
             remote_path="/usr/bin/dipp"
         )
         assert status.app_name == "dipp"
         assert status.running is True
-        assert status.binary_hash == "a1b2c3d4"
+        assert status.file_hash == "a1b2c3d4"
         assert status.remote_path == "/usr/bin/dipp"
 
     def test_app_status_not_running(self):
@@ -106,11 +106,11 @@ class TestAppStatus:
         status = AppStatus(
             app_name="camera-control",
             running=False,
-            binary_hash=None,
+            file_hash=None,
             remote_path="/usr/bin/DiscoCameraController"
         )
         assert status.running is False
-        assert status.binary_hash is None
+        assert status.file_hash is None
 
 
 class TestBackupInfo:
@@ -121,12 +121,12 @@ class TestBackupInfo:
         info = BackupInfo(
             version="20250115-143022-a1b2c3d4",
             timestamp="2025-01-15 14:30:22",
-            binary_hash="a1b2c3d4",
+            file_hash="a1b2c3d4",
             path="/opt/satdeploy/backups/dipp/20250115-143022-a1b2c3d4.bak"
         )
         assert info.version == "20250115-143022-a1b2c3d4"
         assert info.timestamp == "2025-01-15 14:30:22"
-        assert info.binary_hash == "a1b2c3d4"
+        assert info.file_hash == "a1b2c3d4"
         assert info.path.endswith(".bak")
 
 

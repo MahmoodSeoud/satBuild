@@ -12,13 +12,14 @@ class DeploymentRecord:
     """A record of a deployment or rollback operation."""
 
     app: str
-    binary_hash: str
+    file_hash: str
     remote_path: str
     action: str  # 'push' or 'rollback'
     success: bool
     module: str = "default"
     timestamp: Optional[str] = None
     git_hash: Optional[str] = None
+    provenance_source: Optional[str] = None  # "local", "ci/github", or "manual"
     backup_path: Optional[str] = None
     error_message: Optional[str] = None
     service_hash: Optional[str] = None
@@ -56,14 +57,15 @@ class History:
                     app TEXT NOT NULL,
                     timestamp TEXT NOT NULL,
                     git_hash TEXT,
-                    binary_hash TEXT NOT NULL,
+                    file_hash TEXT NOT NULL,
                     remote_path TEXT NOT NULL,
                     backup_path TEXT,
                     action TEXT NOT NULL,
                     success INTEGER NOT NULL,
                     error_message TEXT,
                     service_hash TEXT,
-                    vmem_cleared INTEGER NOT NULL DEFAULT 0
+                    vmem_cleared INTEGER NOT NULL DEFAULT 0,
+                    provenance_source TEXT
                 )
             """)
 
@@ -95,6 +97,9 @@ class History:
         if "git_hash" not in columns:
             conn.execute("ALTER TABLE deployments ADD COLUMN git_hash TEXT")
 
+        if "provenance_source" not in columns:
+            conn.execute("ALTER TABLE deployments ADD COLUMN provenance_source TEXT")
+
     def record(self, record: DeploymentRecord) -> None:
         """Record a deployment operation.
 
@@ -107,15 +112,15 @@ class History:
         conn.execute(
             """
             INSERT INTO deployments
-            (module, app, timestamp, git_hash, binary_hash, remote_path, backup_path, action, success, error_message, service_hash, vmem_cleared)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            (module, app, timestamp, git_hash, file_hash, remote_path, backup_path, action, success, error_message, service_hash, vmem_cleared, provenance_source)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 record.module,
                 record.app,
                 timestamp,
                 record.git_hash,
-                record.binary_hash,
+                record.file_hash,
                 record.remote_path,
                 record.backup_path,
                 record.action,
@@ -123,6 +128,7 @@ class History:
                 record.error_message,
                 record.service_hash,
                 1 if record.vmem_cleared else 0,
+                record.provenance_source,
             ),
         )
         conn.commit()
@@ -241,7 +247,7 @@ class History:
             app=row["app"],
             timestamp=row["timestamp"],
             git_hash=row["git_hash"],
-            binary_hash=row["binary_hash"],
+            file_hash=row["file_hash"],
             remote_path=row["remote_path"],
             backup_path=row["backup_path"],
             action=row["action"],
@@ -249,4 +255,5 @@ class History:
             error_message=row["error_message"],
             service_hash=row["service_hash"],
             vmem_cleared=bool(row["vmem_cleared"]),
+            provenance_source=row["provenance_source"] if "provenance_source" in row.keys() else None,
         )

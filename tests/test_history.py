@@ -50,9 +50,9 @@ class TestHistoryInit:
         conn.close()
 
         expected = {
-            "id", "app", "timestamp", "git_hash", "binary_hash",
+            "id", "app", "timestamp", "git_hash", "file_hash",
             "remote_path", "backup_path", "action", "success", "error_message",
-            "module", "service_hash", "vmem_cleared"
+            "module", "service_hash", "vmem_cleared", "provenance_source"
         }
         assert expected == columns
 
@@ -65,7 +65,7 @@ class TestDeploymentRecordModule:
         record = DeploymentRecord(
             module="som1",
             app="controller",
-            binary_hash="a1b2c3d4",
+            file_hash="a1b2c3d4",
             remote_path="/opt/disco/bin/controller",
             action="push",
             success=True,
@@ -76,7 +76,7 @@ class TestDeploymentRecordModule:
         """Module field defaults to 'default' for backward compatibility."""
         record = DeploymentRecord(
             app="controller",
-            binary_hash="a1b2c3d4",
+            file_hash="a1b2c3d4",
             remote_path="/opt/disco/bin/controller",
             action="push",
             success=True,
@@ -87,7 +87,7 @@ class TestDeploymentRecordModule:
         """DeploymentRecord has service_hash field for tracking service file version."""
         record = DeploymentRecord(
             app="controller",
-            binary_hash="a1b2c3d4",
+            file_hash="a1b2c3d4",
             remote_path="/opt/disco/bin/controller",
             action="push",
             success=True,
@@ -99,7 +99,7 @@ class TestDeploymentRecordModule:
         """Service hash defaults to None for apps without service templates."""
         record = DeploymentRecord(
             app="controller",
-            binary_hash="a1b2c3d4",
+            file_hash="a1b2c3d4",
             remote_path="/opt/disco/bin/controller",
             action="push",
             success=True,
@@ -110,7 +110,7 @@ class TestDeploymentRecordModule:
         """DeploymentRecord has vmem_cleared field."""
         record = DeploymentRecord(
             app="controller",
-            binary_hash="a1b2c3d4",
+            file_hash="a1b2c3d4",
             remote_path="/opt/disco/bin/controller",
             action="push",
             success=True,
@@ -122,7 +122,7 @@ class TestDeploymentRecordModule:
         """vmem_cleared defaults to False."""
         record = DeploymentRecord(
             app="controller",
-            binary_hash="a1b2c3d4",
+            file_hash="a1b2c3d4",
             remote_path="/opt/disco/bin/controller",
             action="push",
             success=True,
@@ -144,7 +144,7 @@ class TestHistoryRecording:
         """Record a successful push deployment."""
         record = DeploymentRecord(
             app="controller",
-            binary_hash="a1b2c3d4",
+            file_hash="a1b2c3d4",
             remote_path="/opt/disco/bin/controller",
             action="push",
             success=True,
@@ -155,7 +155,7 @@ class TestHistoryRecording:
         records = history.get_history("controller")
         assert len(records) == 1
         assert records[0].app == "controller"
-        assert records[0].binary_hash == "a1b2c3d4"
+        assert records[0].file_hash == "a1b2c3d4"
         assert records[0].action == "push"
         assert records[0].success is True
 
@@ -163,7 +163,7 @@ class TestHistoryRecording:
         """Record a failed push deployment."""
         record = DeploymentRecord(
             app="controller",
-            binary_hash="a1b2c3d4",
+            file_hash="a1b2c3d4",
             remote_path="/opt/disco/bin/controller",
             action="push",
             success=False,
@@ -180,7 +180,7 @@ class TestHistoryRecording:
         """Record a rollback operation."""
         record = DeploymentRecord(
             app="controller",
-            binary_hash="a1b2c3d4",
+            file_hash="a1b2c3d4",
             remote_path="/opt/disco/bin/controller",
             action="rollback",
             success=True,
@@ -196,7 +196,7 @@ class TestHistoryRecording:
         """Record includes git hash when available."""
         record = DeploymentRecord(
             app="controller",
-            binary_hash="a1b2c3d4",
+            file_hash="a1b2c3d4",
             remote_path="/opt/disco/bin/controller",
             action="push",
             success=True,
@@ -211,7 +211,7 @@ class TestHistoryRecording:
         """Records get a timestamp automatically."""
         record = DeploymentRecord(
             app="controller",
-            binary_hash="a1b2c3d4",
+            file_hash="a1b2c3d4",
             remote_path="/opt/disco/bin/controller",
             action="push",
             success=True,
@@ -226,7 +226,7 @@ class TestHistoryRecording:
         record = DeploymentRecord(
             module="som1",
             app="controller",
-            binary_hash="a1b2c3d4",
+            file_hash="a1b2c3d4",
             remote_path="/opt/disco/bin/controller",
             action="push",
             success=True,
@@ -240,7 +240,7 @@ class TestHistoryRecording:
         """Record stores and retrieves service_hash field."""
         record = DeploymentRecord(
             app="controller",
-            binary_hash="a1b2c3d4",
+            file_hash="a1b2c3d4",
             remote_path="/opt/disco/bin/controller",
             action="push",
             success=True,
@@ -255,7 +255,7 @@ class TestHistoryRecording:
         """Record stores and retrieves vmem_cleared field."""
         record = DeploymentRecord(
             app="controller",
-            binary_hash="a1b2c3d4",
+            file_hash="a1b2c3d4",
             remote_path="/opt/disco/bin/controller",
             action="push",
             success=True,
@@ -280,7 +280,7 @@ class TestHistoryQuery:
         for i, app in enumerate(["controller", "controller", "csp_server"]):
             record = DeploymentRecord(
                 app=app,
-                binary_hash=f"hash{i}",
+                file_hash=f"hash{i}",
                 remote_path=f"/path/{app}",
                 action="push",
                 success=True,
@@ -298,8 +298,8 @@ class TestHistoryQuery:
     def test_get_history_returns_newest_first(self, history_with_records):
         """History is returned newest first."""
         records = history_with_records.get_history("controller")
-        assert records[0].binary_hash == "hash1"  # Second record added
-        assert records[1].binary_hash == "hash0"  # First record added
+        assert records[0].file_hash == "hash1"  # Second record added
+        assert records[1].file_hash == "hash0"  # First record added
 
     def test_get_history_with_limit(self, history_with_records):
         """Get history with limit."""
@@ -315,7 +315,7 @@ class TestHistoryQuery:
         """Get the most recent deployment for an app."""
         record = history_with_records.get_last_deployment("controller")
         assert record is not None
-        assert record.binary_hash == "hash1"
+        assert record.file_hash == "hash1"
 
     def test_get_last_deployment_returns_none_for_unknown_app(self, history_with_records):
         """Get last deployment returns None for unknown app."""
@@ -337,7 +337,7 @@ class TestModuleState:
         h.record(DeploymentRecord(
             module="som1",
             app="controller",
-            binary_hash="hash_ctrl_som1_v1",
+            file_hash="hash_ctrl_som1_v1",
             remote_path="/path/controller",
             action="push",
             success=True,
@@ -346,7 +346,7 @@ class TestModuleState:
         h.record(DeploymentRecord(
             module="som1",
             app="controller",
-            binary_hash="hash_ctrl_som1_v2",
+            file_hash="hash_ctrl_som1_v2",
             remote_path="/path/controller",
             action="push",
             success=True,
@@ -355,7 +355,7 @@ class TestModuleState:
         h.record(DeploymentRecord(
             module="som1",
             app="csp_server",
-            binary_hash="hash_csp_som1",
+            file_hash="hash_csp_som1",
             remote_path="/path/csp_server",
             action="push",
             success=True,
@@ -364,7 +364,7 @@ class TestModuleState:
         h.record(DeploymentRecord(
             module="som2",
             app="controller",
-            binary_hash="hash_ctrl_som2",
+            file_hash="hash_ctrl_som2",
             remote_path="/path/controller",
             action="push",
             success=True,
@@ -382,8 +382,8 @@ class TestModuleState:
         assert "csp_server" in state
 
         # Controller should be v2 (most recent)
-        assert state["controller"].binary_hash == "hash_ctrl_som1_v2"
-        assert state["csp_server"].binary_hash == "hash_csp_som1"
+        assert state["controller"].file_hash == "hash_ctrl_som1_v2"
+        assert state["csp_server"].file_hash == "hash_csp_som1"
 
     def test_get_module_state_empty_for_unknown_module(self, history_with_modules):
         """get_module_state returns empty dict for unknown module."""
@@ -401,7 +401,7 @@ class TestModuleState:
         # som2 has only 1 app
         assert len(som2_state) == 1
         assert "controller" in som2_state
-        assert som2_state["controller"].binary_hash == "hash_ctrl_som2"
+        assert som2_state["controller"].file_hash == "hash_ctrl_som2"
 
 
 class TestFleetStatus:
@@ -418,7 +418,7 @@ class TestFleetStatus:
         h.record(DeploymentRecord(
             module="som1",
             app="controller",
-            binary_hash="hash_ctrl_som1",
+            file_hash="hash_ctrl_som1",
             remote_path="/path/controller",
             action="push",
             success=True,
@@ -426,7 +426,7 @@ class TestFleetStatus:
         h.record(DeploymentRecord(
             module="som1",
             app="csp_server",
-            binary_hash="hash_csp_som1",
+            file_hash="hash_csp_som1",
             remote_path="/path/csp_server",
             action="push",
             success=True,
@@ -436,7 +436,7 @@ class TestFleetStatus:
         h.record(DeploymentRecord(
             module="som2",
             app="controller",
-            binary_hash="hash_ctrl_som2",
+            file_hash="hash_ctrl_som2",
             remote_path="/path/controller",
             action="push",
             success=True,
@@ -460,12 +460,12 @@ class TestFleetStatus:
         assert len(status["som1"]) == 2
         assert "controller" in status["som1"]
         assert "csp_server" in status["som1"]
-        assert status["som1"]["controller"].binary_hash == "hash_ctrl_som1"
+        assert status["som1"]["controller"].file_hash == "hash_ctrl_som1"
 
         # som2 should have 1 app
         assert len(status["som2"]) == 1
         assert "controller" in status["som2"]
-        assert status["som2"]["controller"].binary_hash == "hash_ctrl_som2"
+        assert status["som2"]["controller"].file_hash == "hash_ctrl_som2"
 
     def test_get_fleet_status_empty_when_no_records(self, tmp_path):
         """get_fleet_status returns empty dict when no records exist."""
@@ -493,7 +493,7 @@ class TestMigration:
                 app TEXT NOT NULL,
                 timestamp TEXT NOT NULL,
                 git_hash TEXT,
-                binary_hash TEXT NOT NULL,
+                file_hash TEXT NOT NULL,
                 remote_path TEXT NOT NULL,
                 backup_path TEXT,
                 action TEXT NOT NULL,
@@ -504,7 +504,7 @@ class TestMigration:
         # Insert old record
         conn.execute("""
             INSERT INTO deployments
-            (app, timestamp, git_hash, binary_hash, remote_path, backup_path, action, success)
+            (app, timestamp, git_hash, file_hash, remote_path, backup_path, action, success)
             VALUES ('controller', '2024-01-01T00:00:00', NULL, 'hash123', '/path/ctrl', NULL, 'push', 1)
         """)
         conn.commit()
@@ -537,7 +537,7 @@ class TestMigration:
                 app TEXT NOT NULL,
                 timestamp TEXT NOT NULL,
                 git_hash TEXT,
-                binary_hash TEXT NOT NULL,
+                file_hash TEXT NOT NULL,
                 remote_path TEXT NOT NULL,
                 backup_path TEXT,
                 action TEXT NOT NULL,
@@ -547,7 +547,7 @@ class TestMigration:
         """)
         conn.execute("""
             INSERT INTO deployments
-            (app, timestamp, git_hash, binary_hash, remote_path, backup_path, action, success)
+            (app, timestamp, git_hash, file_hash, remote_path, backup_path, action, success)
             VALUES ('controller', '2024-01-01T00:00:00', NULL, 'hash123', '/path/ctrl', NULL, 'push', 1)
         """)
         conn.commit()

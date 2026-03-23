@@ -17,7 +17,7 @@
 /* Per-app configuration */
 typedef struct {
     char name[MAX_APP_NAME_LEN];
-    char local_path[MAX_PATH_LEN];      /* Local binary path (on ground station) */
+    char local_path[MAX_PATH_LEN];      /* Local file path (on ground station) */
     char remote_path[MAX_PATH_LEN];     /* Remote install path (on satellite) */
 } satdeploy_app_config_t;
 

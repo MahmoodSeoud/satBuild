@@ -4,6 +4,7 @@ Uses PUB/SUB sockets through zmqproxy, matching libcsp's csp_zmqhub wire
 format. The zmqproxy is an XSUB/XPUB forwarder on default ports 6000/7000.
 """
 
+import os
 import struct
 import time
 from typing import Optional
@@ -287,7 +288,6 @@ class CSPTransport(Transport):
 
     def _get_file_size(self, file_path: str) -> int:
         """Get the size of a file in bytes."""
-        import os
         return os.path.getsize(file_path)
 
     def _next_payload_id(self) -> int:
@@ -307,20 +307,20 @@ class CSPTransport(Transport):
         services: Optional[list[tuple[str, str]]] = None,
         on_progress: Optional[callable] = None,
     ) -> DeployResult:
-        """Deploy a binary via CSP/DTP.
+        """Deploy a file via CSP/DTP.
 
         The satellite agent will:
         1. Stop the app (via libparam)
-        2. Backup the current binary
-        3. Download the new binary via DTP
+        2. Backup the current file
+        3. Download the new file via DTP
         4. Verify the checksum
-        5. Install the binary
+        5. Install the file
         6. Start the app (via libparam)
 
         Args:
             app_name: Name of the application.
-            local_path: Path to the local binary.
-            remote_path: Path on the satellite where binary should be installed.
+            local_path: Path to the local file.
+            remote_path: Path on the satellite where file should be installed.
             param_name: The libparam parameter name (e.g., "mng_dipp").
             appsys_node: The app-sys-manager CSP node address.
             run_node: The CSP node address where app runs.
@@ -361,6 +361,10 @@ class CSPTransport(Transport):
             request.payload_id = payload_id
             request.dtp_server_node = self.ground_node
             request.dtp_server_port = self.dtp_port
+
+            import stat
+            file_stat = os.stat(local_path)
+            request.file_mode = stat.S_IMODE(file_stat.st_mode)
 
             if param_name:
                 request.param_name = param_name
@@ -418,6 +422,7 @@ class CSPTransport(Transport):
                 success=response.success,
                 error_code=response.error_code if not response.success else None,
                 error_message=response.error_message if not response.success else None,
+                backup_path=response.backup_path if response.backup_path else None,
             )
         except TransportError as e:
             return DeployResult(success=False, error_message=str(e))
@@ -441,7 +446,7 @@ class CSPTransport(Transport):
                 result[app.app_name] = AppStatus(
                     app_name=app.app_name,
                     running=app.running,
-                    binary_hash=app.binary_hash if app.binary_hash else None,
+                    file_hash=app.file_hash if app.file_hash else None,
                     remote_path=app.remote_path,
                 )
             return result
@@ -470,7 +475,7 @@ class CSPTransport(Transport):
                 BackupInfo(
                     version=b.version,
                     timestamp=b.timestamp,
-                    binary_hash=b.hash if b.hash else None,
+                    file_hash=b.hash if b.hash else None,
                     path=b.path,
                 )
                 for b in response.backups

@@ -163,8 +163,15 @@ satdeploy_config_t *satdeploy_config_load(void)
                     state = STATE_DEFAULTS_KEY;  /* reuse defaults value handler */
                 }
             } else if (state == STATE_DEFAULTS) {
-                safe_strcpy(current_key, value, sizeof(current_key));
-                state = STATE_DEFAULTS_KEY;
+                /* Check for section keys that can appear after flat fields */
+                if (strcmp(value, "apps") == 0) {
+                    state = STATE_APPS;
+                } else if (strcmp(value, "modules") == 0) {
+                    state = STATE_MODULES;
+                } else {
+                    safe_strcpy(current_key, value, sizeof(current_key));
+                    state = STATE_DEFAULTS_KEY;
+                }
             } else if (state == STATE_DEFAULTS_KEY) {
                 if (strcmp(current_key, "agent_node") == 0) {
                     g_config.agent_node = (uint32_t)atoi(value);

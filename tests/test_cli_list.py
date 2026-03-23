@@ -281,7 +281,7 @@ class TestListPolishedOutput:
         history.record(DeploymentRecord(
             module="som1",
             app="controller",
-            binary_hash="a3f2c9b1",
+            file_hash="a3f2c9b1",
             remote_path="/opt/disco/bin/controller",
             backup_path="/opt/satdeploy/backups/controller/20240115-143022.bak",
             action="push",
@@ -334,7 +334,7 @@ class TestListPolishedOutput:
         history.record(DeploymentRecord(
             module="som1",
             app="controller",
-            binary_hash="newest11",
+            file_hash="newest11",
             remote_path="/opt/disco/bin/controller",
             action="push",
             success=True,

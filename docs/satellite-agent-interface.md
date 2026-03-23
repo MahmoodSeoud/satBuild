@@ -8,7 +8,7 @@ The satdeploy-agent runs on the satellite and handles deployment commands receiv
 
 1. Listens for deploy commands on CSP port 20
 2. Manages app lifecycle via libparam (stop/start)
-3. Downloads binaries from ground via DTP
+3. Downloads files from ground via DTP
 4. Handles backup/restore operations locally
 
 ## CSP Configuration
@@ -68,19 +68,19 @@ Query the status of all managed apps.
 
 **Agent Actions:**
 1. For each known app, check if running (via libparam or process check)
-2. Compute SHA256 checksum of installed binary
+2. Compute SHA256 checksum of installed file
 3. Return AppStatusEntry list
 
 ### CMD_DEPLOY
 
-Deploy a new binary version.
+Deploy a new file version.
 
 **Agent Actions:**
 1. Stop the app: `param_set(param_name, 0)` on appsys_node
-2. Backup current binary to `/opt/satdeploy/backups/<app>/<timestamp>-<hash>.bak`
-3. Connect to ground DTP server and download binary
+2. Backup current file to `/opt/satdeploy/backups/<app>/<timestamp>-<hash>.bak`
+3. Connect to ground DTP server and download file
 4. Verify checksum matches expected_checksum
-5. Install binary to remote_path, chmod +x
+5. Install file to remote_path, chmod +x
 6. Start the app: `param_set(param_name, run_node)` on appsys_node
 7. Return success with backup_path
 
@@ -112,7 +112,7 @@ List available backups for an app.
 
 ### CMD_VERIFY
 
-Verify installed binary checksum.
+Verify installed file checksum.
 
 **Agent Actions:**
 1. Compute SHA256 of file at remote_path
@@ -120,7 +120,7 @@ Verify installed binary checksum.
 
 ## DTP Client Integration
 
-The agent acts as a DTP client to download binaries:
+The agent acts as a DTP client to download files:
 
 1. Connect to ground station's DTP server (dtp_server_node:dtp_server_port)
 2. Send metadata request with payload_id

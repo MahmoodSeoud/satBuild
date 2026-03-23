@@ -4,8 +4,8 @@
  * Stores metadata in /opt/satdeploy/apps.json with format:
  * {
  *   "app_name": {
- *     "remote_path": "/path/to/binary",
- *     "binary_hash": "083fa1c0",
+ *     "remote_path": "/path/to/file",
+ *     "file_hash": "083fa1c0",
  *     "deployed_at": "2026-01-02T11:34:23"
  *   }
  * }
@@ -31,7 +31,7 @@
 typedef struct {
     char app_name[MAX_APP_NAME_LEN];
     char remote_path[MAX_PATH_LEN];
-    char binary_hash[16];
+    char file_hash[16];
     char deployed_at[32];
 } app_entry_t;
 
@@ -158,8 +158,8 @@ static int load_metadata(void) {
 
             if (strcmp(key, "remote_path") == 0) {
                 strncpy(entry->remote_path, value, sizeof(entry->remote_path) - 1);
-            } else if (strcmp(key, "binary_hash") == 0) {
-                strncpy(entry->binary_hash, value, sizeof(entry->binary_hash) - 1);
+            } else if (strcmp(key, "file_hash") == 0) {
+                strncpy(entry->file_hash, value, sizeof(entry->file_hash) - 1);
             } else if (strcmp(key, "deployed_at") == 0) {
                 strncpy(entry->deployed_at, value, sizeof(entry->deployed_at) - 1);
             }
@@ -189,7 +189,7 @@ static int save_metadata(void) {
         app_entry_t *e = &app_cache[i];
         fprintf(f, "  \"%s\": {\n", e->app_name);
         fprintf(f, "    \"remote_path\": \"%s\",\n", e->remote_path);
-        fprintf(f, "    \"binary_hash\": \"%s\",\n", e->binary_hash);
+        fprintf(f, "    \"file_hash\": \"%s\",\n", e->file_hash);
         fprintf(f, "    \"deployed_at\": \"%s\"\n", e->deployed_at);
         fprintf(f, "  }%s\n", (i < app_count - 1) ? "," : "");
     }
@@ -213,7 +213,7 @@ static app_entry_t *find_app(const char *app_name) {
 /* Public API */
 
 int app_metadata_save(const char *app_name, const char *remote_path,
-                      const char *binary_hash) {
+                      const char *file_hash) {
     load_metadata();
 
     app_entry_t *entry = find_app(app_name);
@@ -227,7 +227,7 @@ int app_metadata_save(const char *app_name, const char *remote_path,
     }
 
     strncpy(entry->remote_path, remote_path, sizeof(entry->remote_path) - 1);
-    strncpy(entry->binary_hash, binary_hash, sizeof(entry->binary_hash) - 1);
+    strncpy(entry->file_hash, file_hash, sizeof(entry->file_hash) - 1);
 
     /* Generate ISO timestamp */
     time_t now = time(NULL);
@@ -241,7 +241,7 @@ int app_metadata_save(const char *app_name, const char *remote_path,
 }
 
 int app_metadata_get(const char *app_name, char *remote_path, size_t path_size,
-                     char *binary_hash, size_t hash_size,
+                     char *file_hash, size_t hash_size,
                      char *deployed_at, size_t time_size) {
     app_entry_t *entry = find_app(app_name);
     if (!entry) {
@@ -252,9 +252,9 @@ int app_metadata_get(const char *app_name, char *remote_path, size_t path_size,
         strncpy(remote_path, entry->remote_path, path_size - 1);
         remote_path[path_size - 1] = '\0';
     }
-    if (binary_hash && hash_size > 0) {
-        strncpy(binary_hash, entry->binary_hash, hash_size - 1);
-        binary_hash[hash_size - 1] = '\0';
+    if (file_hash && hash_size > 0) {
+        strncpy(file_hash, entry->file_hash, hash_size - 1);
+        file_hash[hash_size - 1] = '\0';
     }
     if (deployed_at && time_size > 0) {
         strncpy(deployed_at, entry->deployed_at, time_size - 1);
@@ -269,7 +269,7 @@ int app_metadata_list(app_metadata_callback callback, void *user_data) {
 
     for (int i = 0; i < app_count; i++) {
         app_entry_t *e = &app_cache[i];
-        callback(e->app_name, e->remote_path, e->binary_hash,
+        callback(e->app_name, e->remote_path, e->file_hash,
                  e->deployed_at, user_data);
     }
 

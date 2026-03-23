@@ -18,11 +18,11 @@ def parse_backup_version(version: str) -> dict:
     if len(parts) >= 3:
         # New format: YYYYMMDD-HHMMSS-hash
         timestamp_str = f"{parts[0]}-{parts[1]}"
-        binary_hash = parts[2] if len(parts) > 2 else None
+        file_hash = parts[2] if len(parts) > 2 else None
     else:
         # Old format: YYYYMMDD-HHMMSS
         timestamp_str = version
-        binary_hash = None
+        file_hash = None
 
     try:
         dt = datetime.strptime(timestamp_str, "%Y%m%d-%H%M%S")
@@ -30,11 +30,11 @@ def parse_backup_version(version: str) -> dict:
     except ValueError:
         timestamp = version
 
-    return {"timestamp": timestamp, "hash": binary_hash}
+    return {"timestamp": timestamp, "file_hash": file_hash}
 
 
 class Deployer:
-    """Handles deployment of binaries to remote target."""
+    """Handles deployment of files to remote target."""
 
     def __init__(
         self,
@@ -94,7 +94,7 @@ class Deployer:
             backups.append({
                 "version": version,
                 "timestamp": parsed["timestamp"],
-                "hash": parsed["hash"],
+                "hash": parsed["file_hash"],
                 "path": f"{backup_dir}/{line}",
             })
 
@@ -102,11 +102,11 @@ class Deployer:
         return backups
 
     def backup(self, app_name: str, remote_path: str) -> Optional[str]:
-        """Create a backup of the current remote binary.
+        """Create a backup of the current remote file.
 
         Args:
             app_name: The application name.
-            remote_path: Path to the remote binary.
+            remote_path: Path to the remote file.
 
         Returns:
             The backup path, or None if no backup was created.
@@ -130,12 +130,15 @@ class Deployer:
 
         return backup_path
 
-    def deploy(self, local_path: str, remote_path: str) -> None:
-        """Deploy a local binary to the remote path.
+    def deploy(self, local_path: str, remote_path: str, file_mode: int = 0o755) -> None:
+        """Deploy a local file to the remote path.
 
         Args:
-            local_path: Path to the local binary.
+            local_path: Path to the local file.
             remote_path: Path on the remote host.
+            file_mode: Unix file permissions to apply (default 0o755).
+                Typically obtained via os.stat(local_path).st_mode to
+                preserve the source file's permissions.
         """
         # Create parent directory if it doesn't exist
         parent_dir = "/".join(remote_path.rsplit("/", 1)[:-1])
@@ -143,7 +146,7 @@ class Deployer:
             self._ssh.run(f"mkdir -p '{parent_dir}'")
 
         self._ssh.upload(local_path, remote_path)
-        self._ssh.run(f"chmod +x '{remote_path}'")
+        self._ssh.run(f"chmod {oct(file_mode)[2:]} '{remote_path}'")
 
     def clear_vmem_dir(self, vmem_dir: str) -> None:
         """Clear vmem directory contents and recreate empty.
@@ -179,9 +182,10 @@ class Deployer:
     def restore(self, backup_path: str, remote_path: str) -> None:
         """Restore a backup file to the remote path.
 
+        Uses cp -p to preserve the original file permissions from the backup.
+
         Args:
             backup_path: Path to the backup file on remote.
             remote_path: Path to restore to on remote.
         """
-        self._ssh.run(f"cp '{backup_path}' '{remote_path}'")
-        self._ssh.run(f"chmod +x '{remote_path}'")
+        self._ssh.run(f"cp -p '{backup_path}' '{remote_path}'")

@@ -180,7 +180,7 @@ apps:
         mock_transport.get_status.return_value = {
             "dipp": AppStatus(
                 app_name="dipp", running=True,
-                binary_hash="abcd1234", remote_path="/opt/disco/bin/dipp",
+                file_hash="abcd1234", remote_path="/opt/disco/bin/dipp",
             )
         }
 
@@ -207,7 +207,7 @@ apps:
         mock_transport.get_status.return_value = {
             "dipp": AppStatus(
                 app_name="dipp", running=False,
-                binary_hash="abcd1234", remote_path="/opt/disco/bin/dipp",
+                file_hash="abcd1234", remote_path="/opt/disco/bin/dipp",
             )
         }
 
@@ -368,7 +368,7 @@ apps:
             "dipp": AppStatus(
                 app_name="dipp",
                 running=True,
-                binary_hash="abc12345",
+                file_hash="abc12345",
                 remote_path="/opt/disco/bin/dipp",
             )
         }
@@ -437,13 +437,13 @@ apps:
             BackupInfo(
                 version="20250131-120000",
                 timestamp="2025-01-31 12:00:00",
-                binary_hash="abc12345",
+                file_hash="abc12345",
                 path="/opt/satdeploy/backups/dipp/20250131-120000-abc12345.bak",
             ),
             BackupInfo(
                 version="20250130-100000",
                 timestamp="2025-01-30 10:00:00",
-                binary_hash="def67890",
+                file_hash="def67890",
                 path="/opt/satdeploy/backups/dipp/20250130-100000-def67890.bak",
             ),
         ]

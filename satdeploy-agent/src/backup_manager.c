@@ -224,8 +224,13 @@ int backup_restore(const char *backup_path, const char *dest_path) {
         return -1;
     }
 
-    /* Make executable */
-    chmod(dest_path, 0755);
+    /* Preserve the backup file's permissions */
+    struct stat bst;
+    if (stat(backup_path, &bst) == 0) {
+        chmod(dest_path, bst.st_mode);
+    } else {
+        chmod(dest_path, 0755);  /* fallback */
+    }
 
     printf("\033[32m[backup] restored → %s\033[0m\n", dest_path);
     fflush(stdout);

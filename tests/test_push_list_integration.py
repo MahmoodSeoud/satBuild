@@ -68,7 +68,7 @@ class TestPushThenListWorkflow:
 
         transport = MagicMock()
         transport.deploy.return_value = DeployResult(
-            success=True, binary_hash="aaaaaaaa",
+            success=True, file_hash="aaaaaaaa",
         )
         mock_get_transport.return_value = transport
 
@@ -82,7 +82,7 @@ class TestPushThenListWorkflow:
         binary_v1.write_bytes(b"version 2 content - different!")
 
         transport.deploy.return_value = DeployResult(
-            success=True, binary_hash="bbbbbbbb",
+            success=True, file_hash="bbbbbbbb",
             backup_path="/backups/test_app/20241227-120000-aaaaaaaa.bak",
         )
 
@@ -197,7 +197,7 @@ class TestListShowsCurrentlyDeployed:
         history.record(DeploymentRecord(
             module="som1",
             app="test_app",
-            binary_hash="aaaaaaaa",
+            file_hash="aaaaaaaa",
             remote_path="/home/user/bin/test_app",
             backup_path=None,
             action="push",
@@ -207,7 +207,7 @@ class TestListShowsCurrentlyDeployed:
         history.record(DeploymentRecord(
             module="som1",
             app="test_app",
-            binary_hash="bbbbbbbb",
+            file_hash="bbbbbbbb",
             remote_path="/home/user/bin/test_app",
             backup_path="/home/user/.satdeploy/backups/test_app/20241227-120000-aaaaaaaa.bak",
             action="push",
@@ -282,7 +282,7 @@ class TestListShowsCurrentlyDeployed:
         history.record(DeploymentRecord(
             module="som1",
             app="test_app",
-            binary_hash="aaaaaaaa",
+            file_hash="aaaaaaaa",
             remote_path="/home/user/bin/test_app",
             backup_path=None,
             action="push",
@@ -347,7 +347,7 @@ class TestBackupCreatedOnSecondPush:
         transport = MagicMock()
         transport.deploy.return_value = DeployResult(
             success=True,
-            binary_hash="abc12345",
+            file_hash="abc12345",
             backup_path="/backups/test_app/20241227-120000-abc12345.bak",
         )
         mock_get_transport.return_value = transport

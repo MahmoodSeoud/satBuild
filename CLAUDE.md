@@ -67,12 +67,12 @@ Both implement the same interface: `deploy()`, `rollback()`, `get_status()`, `li
 | `transport/base.py` | Abstract transport interface |
 | `transport/ssh.py` | SSH/SFTP implementation |
 | `transport/csp.py` | CSP/DTP implementation |
-| `deployer.py` | Backup creation, binary upload, hash verification |
+| `deployer.py` | Backup creation, file upload, hash verification |
 | `services.py` | systemd service management |
 | `dependencies.py` | Topological sort for service ordering |
 | `history.py` | SQLite deployment tracking |
 | `output.py` | CLI formatting (colors, symbols, steps) |
-| `csp/dtp_server.py` | DTP server for serving binaries to satellite |
+| `csp/dtp_server.py` | DTP server for serving files to satellite |
 
 ### satdeploy-agent (C)
 
@@ -84,7 +84,7 @@ Runs on target, listens on CSP port 20 for protobuf commands:
 | `DEPLOY` | Stop app, backup, download via DTP, install, start |
 | `ROLLBACK` | Restore from backup directory |
 | `LIST_VERSIONS` | List available backups |
-| `VERIFY` | Return SHA256 of installed binary |
+| `VERIFY` | Return SHA256 of installed file |
 
 **Interfaces:** ZMQ (default), CAN, KISS serial
 
@@ -102,7 +102,7 @@ Ground station csh module providing:
 ## CLI Commands
 
 ```bash
-satdeploy push <app>                # Deploy binary
+satdeploy push <app>                # Deploy file
 satdeploy push <app> --local ./path # Deploy with path override
 satdeploy push --all                # Deploy all apps
 satdeploy push --require-clean      # Refuse to deploy from dirty git tree
@@ -157,7 +157,7 @@ The `name` field identifies this target in history records (defaults to `"defaul
 
 ### SSH Transport
 1. Stop services (dependents first)
-2. Backup current binary to `{backup_dir}/{app}/{timestamp}-{hash}.bak`
+2. Backup current file to `{backup_dir}/{app}/{timestamp}-{hash}.bak`
 3. Upload via SFTP
 4. Start services (dependencies first)
 5. Health check
@@ -166,8 +166,8 @@ The `name` field identifies this target in history records (defaults to `"defaul
 ### CSP Transport
 1. Send DEPLOY command to agent (port 20)
 2. Agent stops app via libparam
-3. Agent backs up current binary
-4. Agent downloads new binary via DTP from ground
+3. Agent backs up current file
+4. Agent downloads new file via DTP from ground
 5. Agent verifies checksum
 6. Agent starts app via libparam
 

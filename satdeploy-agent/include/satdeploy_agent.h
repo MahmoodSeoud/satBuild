@@ -128,11 +128,11 @@ int dtp_download_file(uint32_t server_node, uint16_t payload_id,
  *
  * @param app_name Application name.
  * @param remote_path Path where app is installed.
- * @param binary_hash Hash of the deployed binary.
+ * @param file_hash Hash of the deployed file.
  * @return 0 on success, -1 on failure.
  */
 int app_metadata_save(const char *app_name, const char *remote_path,
-                      const char *binary_hash);
+                      const char *file_hash);
 
 /**
  * Get app deployment metadata.
@@ -140,14 +140,14 @@ int app_metadata_save(const char *app_name, const char *remote_path,
  * @param app_name Application name.
  * @param remote_path Buffer for remote path (can be NULL).
  * @param path_size Size of remote_path buffer.
- * @param binary_hash Buffer for hash (can be NULL).
- * @param hash_size Size of binary_hash buffer.
+ * @param file_hash Buffer for hash (can be NULL).
+ * @param hash_size Size of file_hash buffer.
  * @param deployed_at Buffer for timestamp (can be NULL).
  * @param time_size Size of deployed_at buffer.
  * @return 0 on success, -1 if app not found.
  */
 int app_metadata_get(const char *app_name, char *remote_path, size_t path_size,
-                     char *binary_hash, size_t hash_size,
+                     char *file_hash, size_t hash_size,
                      char *deployed_at, size_t time_size);
 
 /**
@@ -158,7 +158,7 @@ int app_metadata_get(const char *app_name, char *remote_path, size_t path_size,
  * @return Number of apps.
  */
 typedef void (*app_metadata_callback)(const char *app_name, const char *remote_path,
-                                      const char *binary_hash, const char *deployed_at,
+                                      const char *file_hash, const char *deployed_at,
                                       void *user_data);
 int app_metadata_list(app_metadata_callback callback, void *user_data);
 

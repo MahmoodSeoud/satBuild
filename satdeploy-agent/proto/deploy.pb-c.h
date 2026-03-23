@@ -45,7 +45,7 @@ typedef enum _Satdeploy__DeployCommand {
    */
   SATDEPLOY__DEPLOY_COMMAND__CMD_LIST_VERSIONS = 4,
   /*
-   * Check installed binary checksum
+   * Fetch service logs from target
    */
   SATDEPLOY__DEPLOY_COMMAND__CMD_LOGS = 5,
   /*
@@ -166,13 +166,20 @@ struct  Satdeploy__DeployRequest
    */
   ProtobufCBinaryData chunk_data;
   /*
-   * Number of log lines to retrieve (for CMD_LOGS)
+   * For CMD_LOGS
+   */
+  /*
+   * Number of log lines to fetch (default: 100)
    */
   uint32_t log_lines;
+  /*
+   * Source file permission mode (e.g., 0755, 0644). 0 = use default (0755).
+   */
+  uint32_t file_mode;
 };
 #define SATDEPLOY__DEPLOY_REQUEST__INIT \
  { PROTOBUF_C_MESSAGE_INIT (&satdeploy__deploy_request__descriptor) \
-    , SATDEPLOY__DEPLOY_COMMAND__CMD_UNKNOWN, (char *)protobuf_c_empty_string, (char *)protobuf_c_empty_string, 0, 0, (char *)protobuf_c_empty_string, 0, 0, 0, 0, (char *)protobuf_c_empty_string, (char *)protobuf_c_empty_string, 0, 0, {0,NULL}, 0 }
+, SATDEPLOY__DEPLOY_COMMAND__CMD_UNKNOWN, (char *)protobuf_c_empty_string, (char *)protobuf_c_empty_string, 0, 0, (char *)protobuf_c_empty_string, 0, 0, 0, 0, (char *)protobuf_c_empty_string, (char *)protobuf_c_empty_string, 0, 0, {0,NULL}, 0, 0 }
 
 
 /*
@@ -190,7 +197,7 @@ struct  Satdeploy__BackupEntry
    */
   char *timestamp;
   /*
-   * Binary hash
+   * File hash
    */
   char *hash;
   /*
@@ -200,7 +207,7 @@ struct  Satdeploy__BackupEntry
 };
 #define SATDEPLOY__BACKUP_ENTRY__INIT \
  { PROTOBUF_C_MESSAGE_INIT (&satdeploy__backup_entry__descriptor) \
-    , (char *)protobuf_c_empty_string, (char *)protobuf_c_empty_string, (char *)protobuf_c_empty_string, (char *)protobuf_c_empty_string }
+, (char *)protobuf_c_empty_string, (char *)protobuf_c_empty_string, (char *)protobuf_c_empty_string, (char *)protobuf_c_empty_string }
 
 
 /*
@@ -211,12 +218,12 @@ struct  Satdeploy__AppStatusEntry
   ProtobufCMessage base;
   char *app_name;
   protobuf_c_boolean running;
-  char *binary_hash;
+  char *file_hash;
   char *remote_path;
 };
 #define SATDEPLOY__APP_STATUS_ENTRY__INIT \
  { PROTOBUF_C_MESSAGE_INIT (&satdeploy__app_status_entry__descriptor) \
-    , (char *)protobuf_c_empty_string, 0, (char *)protobuf_c_empty_string, (char *)protobuf_c_empty_string }
+, (char *)protobuf_c_empty_string, 0, (char *)protobuf_c_empty_string, (char *)protobuf_c_empty_string }
 
 
 /*
@@ -249,7 +256,7 @@ struct  Satdeploy__DeployResponse
 };
 #define SATDEPLOY__DEPLOY_RESPONSE__INIT \
  { PROTOBUF_C_MESSAGE_INIT (&satdeploy__deploy_response__descriptor) \
-    , 0, 0, (char *)protobuf_c_empty_string, 0,NULL, 0,NULL, (char *)protobuf_c_empty_string, (char *)protobuf_c_empty_string }
+, 0, 0, (char *)protobuf_c_empty_string, 0,NULL, 0,NULL, (char *)protobuf_c_empty_string, (char *)protobuf_c_empty_string }
 
 
 /* Satdeploy__DeployRequest methods */

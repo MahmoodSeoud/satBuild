@@ -390,7 +390,7 @@ class TestRollbackHistoryLogging:
 
     @patch("satdeploy.cli.SSHClient")
     def test_rollback_stores_hash_not_version_string(self, mock_ssh_class, tmp_path):
-        """Rollback should store just the hash in binary_hash, not the full version string."""
+        """Rollback should store just the hash in file_hash, not the full version string."""
         from satdeploy.history import History
 
         runner = CliRunner()
@@ -428,9 +428,9 @@ class TestRollbackHistoryLogging:
 
         history = History(config_dir / "history.db")
         records = history.get_history("controller")
-        # binary_hash should be just the hash, not the full version string
-        assert records[0].binary_hash == "abc12345"
-        assert records[0].binary_hash != "20240115-143022-abc12345"
+        # file_hash should be just the hash, not the full version string
+        assert records[0].file_hash == "abc12345"
+        assert records[0].file_hash != "20240115-143022-abc12345"
 
     @patch("satdeploy.cli.SSHClient")
     def test_rollback_logs_failed_operation(self, mock_ssh_class, tmp_path):
@@ -630,7 +630,7 @@ class TestRollbackDialBehavior:
         history.record(DeploymentRecord(
             module="som1",
             app="controller",
-            binary_hash="bbbbbbbb",
+            file_hash="bbbbbbbb",
             remote_path="/opt/disco/bin/controller",
             action="rollback",
             success=True,
@@ -683,7 +683,7 @@ class TestRollbackDialBehavior:
         history.record(DeploymentRecord(
             module="som1",
             app="controller",
-            binary_hash="aaaaaaaa",
+            file_hash="aaaaaaaa",
             remote_path="/opt/disco/bin/controller",
             action="rollback",
             success=True,
@@ -735,7 +735,7 @@ class TestRollbackDialBehavior:
         history.record(DeploymentRecord(
             module="som1",
             app="controller",
-            binary_hash="aaaaaaaa",
+            file_hash="aaaaaaaa",
             remote_path="/opt/disco/bin/controller",
             action="rollback",
             success=True,

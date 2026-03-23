@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 import pytest
 
-from satdeploy.provenance import capture_provenance
+from satdeploy.provenance import capture_provenance, detect_ci_provenance, resolve_provenance
 
 
 @pytest.fixture
@@ -25,8 +25,8 @@ def git_repo(tmp_path):
     )
 
     # Create and commit a binary file
-    binary_path = tmp_path / "app.bin"
-    binary_path.write_bytes(b"\x00" * 64)
+    file_path = tmp_path / "app.bin"
+    file_path.write_bytes(b"\x00" * 64)
     subprocess.run(
         ["git", "-C", str(tmp_path), "add", "app.bin"],
         check=True,
@@ -38,7 +38,7 @@ def git_repo(tmp_path):
         capture_output=True,
     )
 
-    return tmp_path, str(binary_path)
+    return tmp_path, str(file_path)
 
 
 class TestCaptureProvenance:
@@ -46,9 +46,9 @@ class TestCaptureProvenance:
 
     def test_clean_tree(self, git_repo):
         """Clean git repo returns branch@hash with no -dirty suffix."""
-        repo_dir, binary_path = git_repo
+        repo_dir, file_path = git_repo
 
-        result = capture_provenance(binary_path)
+        result = capture_provenance(file_path)
 
         assert result is not None
         # Should not have -dirty suffix
@@ -61,7 +61,7 @@ class TestCaptureProvenance:
 
     def test_dirty_tree(self, git_repo):
         """Dirty git repo returns branch@hash-dirty."""
-        repo_dir, binary_path = git_repo
+        repo_dir, file_path = git_repo
 
         # Make the tree dirty
         dirty_file = repo_dir / "uncommitted.txt"
@@ -72,7 +72,7 @@ class TestCaptureProvenance:
             capture_output=True,
         )
 
-        result = capture_provenance(binary_path)
+        result = capture_provenance(file_path)
 
         assert result is not None
         assert result.endswith("-dirty")
@@ -80,7 +80,7 @@ class TestCaptureProvenance:
 
     def test_detached_head(self, git_repo):
         """Detached HEAD returns @hash without branch name."""
-        repo_dir, binary_path = git_repo
+        repo_dir, file_path = git_repo
 
         # Get the current commit hash and detach HEAD
         hash_result = subprocess.run(
@@ -96,7 +96,7 @@ class TestCaptureProvenance:
             capture_output=True,
         )
 
-        result = capture_provenance(binary_path)
+        result = capture_provenance(file_path)
 
         assert result is not None
         # Should start with @ (no branch name)
@@ -109,39 +109,39 @@ class TestCaptureProvenance:
 
     def test_not_a_git_repo(self, tmp_path):
         """Non-git directory returns None."""
-        binary_path = tmp_path / "app.bin"
-        binary_path.write_bytes(b"\x00" * 64)
+        file_path = tmp_path / "app.bin"
+        file_path.write_bytes(b"\x00" * 64)
 
-        result = capture_provenance(str(binary_path))
+        result = capture_provenance(str(file_path))
 
         assert result is None
 
     def test_git_not_installed(self, tmp_path):
         """Returns None when git is not installed."""
-        binary_path = tmp_path / "app.bin"
-        binary_path.write_bytes(b"\x00" * 64)
+        file_path = tmp_path / "app.bin"
+        file_path.write_bytes(b"\x00" * 64)
 
         with patch("satdeploy.provenance.subprocess.run", side_effect=FileNotFoundError):
-            result = capture_provenance(str(binary_path))
+            result = capture_provenance(str(file_path))
 
         assert result is None
 
     def test_subprocess_error(self, tmp_path):
         """Returns None on subprocess errors."""
-        binary_path = tmp_path / "app.bin"
-        binary_path.write_bytes(b"\x00" * 64)
+        file_path = tmp_path / "app.bin"
+        file_path.write_bytes(b"\x00" * 64)
 
         with patch(
             "satdeploy.provenance.subprocess.run",
             side_effect=subprocess.SubprocessError("git crashed"),
         ):
-            result = capture_provenance(str(binary_path))
+            result = capture_provenance(str(file_path))
 
         assert result is None
 
     def test_branch_name_in_result(self, git_repo):
         """Branch name is included in the provenance string."""
-        repo_dir, binary_path = git_repo
+        repo_dir, file_path = git_repo
 
         # Create and switch to a named branch
         subprocess.run(
@@ -150,7 +150,92 @@ class TestCaptureProvenance:
             capture_output=True,
         )
 
-        result = capture_provenance(binary_path)
+        result = capture_provenance(file_path)
 
         assert result is not None
         assert result.startswith("feature/test@")
+
+
+class TestDetectCiProvenance:
+    """Tests for CI environment detection."""
+
+    def test_github_actions_full(self):
+        """Detects GitHub Actions with all env vars."""
+        env = {
+            "GITHUB_SHA": "abc123def456789012345678901234567890abcd",
+            "GITHUB_REF_NAME": "main",
+            "GITHUB_RUN_ID": "42",
+        }
+        with patch.dict(os.environ, env, clear=False):
+            prov, source = detect_ci_provenance()
+
+        assert prov == "main@abc123de (ci:github/run/42)"
+        assert source == "ci/github"
+
+    def test_github_actions_minimal(self):
+        """Detects GitHub Actions with only GITHUB_SHA."""
+        env = {"GITHUB_SHA": "abc123def456789012345678901234567890abcd"}
+        with patch.dict(os.environ, env, clear=False):
+            # Clear other env vars that might be set
+            with patch.dict(os.environ, {"GITHUB_REF_NAME": "", "GITHUB_RUN_ID": ""}, clear=False):
+                prov, source = detect_ci_provenance()
+
+        assert prov == "@abc123de"
+        assert source == "ci/github"
+
+    def test_not_in_ci(self):
+        """Returns None when not in CI."""
+        env_remove = {"GITHUB_SHA": None, "GITHUB_REF_NAME": None, "GITHUB_RUN_ID": None}
+        with patch.dict(os.environ, {}, clear=False):
+            # Ensure GITHUB_SHA is not set
+            for key in env_remove:
+                os.environ.pop(key, None)
+            prov, source = detect_ci_provenance()
+
+        assert prov is None
+        assert source is None
+
+
+class TestResolveProvenance:
+    """Tests for provenance resolution priority."""
+
+    def test_manual_override_wins(self, tmp_path):
+        """Manual override beats CI and local git."""
+        f = tmp_path / "test"
+        f.write_text("test")
+
+        env = {"GITHUB_SHA": "abc123def456789012345678901234567890abcd"}
+        with patch.dict(os.environ, env, clear=False):
+            prov, source = resolve_provenance(str(f), manual_override="release/v1.0@deadbeef")
+
+        assert prov == "release/v1.0@deadbeef"
+        assert source == "manual"
+
+    def test_ci_beats_local(self, git_repo):
+        """CI provenance beats local git when both available."""
+        _, file_path = git_repo
+
+        env = {
+            "GITHUB_SHA": "abc123def456789012345678901234567890abcd",
+            "GITHUB_REF_NAME": "main",
+            "GITHUB_RUN_ID": "99",
+        }
+        with patch.dict(os.environ, env, clear=False):
+            prov, source = resolve_provenance(file_path)
+
+        assert source == "ci/github"
+        assert "abc123de" in prov
+
+    def test_fallback_to_local(self, git_repo):
+        """Falls back to local git when no CI and no manual override."""
+        _, file_path = git_repo
+
+        # Ensure no CI env vars
+        for key in ("GITHUB_SHA", "GITHUB_REF_NAME", "GITHUB_RUN_ID"):
+            os.environ.pop(key, None)
+
+        prov, source = resolve_provenance(file_path)
+
+        assert source == "local"
+        assert prov is not None
+        assert "@" in prov  # branch@hash format

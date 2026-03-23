@@ -19,7 +19,7 @@ class DeployResult:
     backup_path: Optional[str] = None
     error_code: Optional[int] = None
     error_message: Optional[str] = None
-    binary_hash: Optional[str] = None
+    file_hash: Optional[str] = None
     skipped: bool = False
     restored: bool = False
 
@@ -30,7 +30,7 @@ class AppStatus:
 
     app_name: str
     running: bool
-    binary_hash: Optional[str]
+    file_hash: Optional[str]
     remote_path: str
 
 
@@ -40,7 +40,7 @@ class BackupInfo:
 
     version: str
     timestamp: str
-    binary_hash: Optional[str]
+    file_hash: Optional[str]
     path: str
 
 
@@ -50,7 +50,7 @@ class Transport(ABC):
     Transport implementations provide communication between satdeploy
     and the target device. Each transport handles:
     - Connection management (connect/disconnect)
-    - Deployment operations (deploy binary, rollback)
+    - Deployment operations (deploy file, rollback)
     - Status queries (app status, backup listing)
     - Verification (checksum validation)
 
@@ -85,12 +85,12 @@ class Transport(ABC):
         expected_checksum: Optional[str] = None,
         services: Optional[list[tuple[str, str]]] = None,
     ) -> DeployResult:
-        """Deploy a binary to the target.
+        """Deploy a file to the target.
 
         Args:
             app_name: Name of the application.
-            local_path: Path to the local binary.
-            remote_path: Path on the target where binary should be installed.
+            local_path: Path to the local file.
+            remote_path: Path on the target where file should be installed.
             param_name: For CSP: the libparam parameter name (e.g., "mng_dipp").
             appsys_node: For CSP: the app-sys-manager CSP node address.
             run_node: For CSP: the CSP node address where app runs.
