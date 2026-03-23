@@ -41,6 +41,10 @@ COPY satdeploy-agent/ /build/satdeploy-agent/
 RUN test -f /build/satdeploy-agent/lib/csp/meson.build \
     || (echo "ERROR: git submodules not initialized. Run: git submodule update --init --recursive" && exit 1)
 
+# Verify DTP's ossi submodule is present
+RUN test -f /build/satdeploy-agent/lib/dtp/extern/ossi/meson.build \
+    || (echo "ERROR: DTP ossi submodule not found" && ls -la /build/satdeploy-agent/lib/dtp/extern/ && exit 1)
+
 # Build satdeploy-agent (wipe any stale build dir from host)
 RUN cd /build/satdeploy-agent \
     && rm -rf build \
