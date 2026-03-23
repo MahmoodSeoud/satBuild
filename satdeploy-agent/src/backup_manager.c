@@ -180,7 +180,7 @@ int backup_create(const char *app_name, const char *src_path,
                 char existing_path[MAX_PATH_LEN];
                 snprintf(existing_path, sizeof(existing_path), "%s/%s",
                          backup_dir, entry->d_name);
-                printf("[backup] Hash exists: %s (skip)\n", existing_path);
+                /* hash already backed up — skip */
                 if (backup_path_out != NULL && backup_path_size > 0) {
                     strncpy(backup_path_out, existing_path, backup_path_size - 1);
                     backup_path_out[backup_path_size - 1] = '\0';
@@ -203,7 +203,8 @@ int backup_create(const char *app_name, const char *src_path,
         backup_path_out[backup_path_size - 1] = '\0';
     }
 
-    printf("[backup] Created: %s\n", backup_path);
+    printf("[backup] backed up → %s\n", hash);
+    fflush(stdout);
     return 0;
 }
 
@@ -226,7 +227,8 @@ int backup_restore(const char *backup_path, const char *dest_path) {
     /* Make executable */
     chmod(dest_path, 0755);
 
-    printf("[backup] Restored: %s -> %s\n", backup_path, dest_path);
+    printf("\033[32m[backup] restored → %s\033[0m\n", dest_path);
+    fflush(stdout);
     return 0;
 }
 

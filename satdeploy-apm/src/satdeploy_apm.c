@@ -6,7 +6,7 @@
  *   satdeploy deploy  - Deploy a binary
  *   satdeploy rollback - Rollback to previous version
  *   satdeploy list    - List available backups
- *   satdeploy verify  - Verify binary checksum
+ *   satdeploy logs    - Show service logs
  */
 
 #include <stdio.h>
@@ -743,18 +743,16 @@ static int satdeploy_list_cmd(struct slash *slash)
     return SLASH_SUCCESS;
 }
 
-static int satdeploy_verify_cmd(struct slash *slash)
+static int satdeploy_logs_cmd(struct slash *slash)
 {
     unsigned int node = 0;
+    unsigned int lines = 100;
     char *app_name = NULL;
-    char *remote_path = NULL;
-    char *expected_checksum = NULL;
 
-    optparse_t *parser = optparse_new("satdeploy verify", "<app_name>");
+    optparse_t *parser = optparse_new("satdeploy logs", "<app_name>");
     optparse_add_help(parser);
     optparse_add_unsigned(parser, 'n', "node", "NUM", 0, &node, "Target node (default: from config)");
-    optparse_add_string(parser, 'r', "remote", "PATH", &remote_path, "Remote file path to verify");
-    optparse_add_string(parser, 'c', "checksum", "HEX", &expected_checksum, "Expected checksum to compare");
+    optparse_add_unsigned(parser, 'l', "lines", "NUM", 0, &lines, "Number of log lines (default: 100)");
 
     int argi = optparse_parse(parser, slash->argc - 1, (const char **)slash->argv + 1);
     if (argi < 0) {
@@ -782,21 +780,10 @@ static int satdeploy_verify_cmd(struct slash *slash)
         node = slash_dfl_node;
     }
 
-    /* Look up remote_path from config if not specified */
-    if (!remote_path && config) {
-        satdeploy_app_config_t *app_config = satdeploy_config_get_app(config, app_name);
-        if (app_config && app_config->remote_path[0]) {
-            remote_path = app_config->remote_path;
-        }
-    }
-
-    printf("Verifying '%s' on node %u...\n", app_name, node);
-
     Satdeploy__DeployRequest req = SATDEPLOY__DEPLOY_REQUEST__INIT;
-    req.command = SATDEPLOY__DEPLOY_COMMAND__CMD_VERIFY;
+    req.command = SATDEPLOY__DEPLOY_COMMAND__CMD_LOGS;
     req.app_name = app_name;
-    req.remote_path = remote_path ? remote_path : "";
-    req.expected_checksum = expected_checksum ? expected_checksum : "";
+    req.log_lines = lines;
 
     Satdeploy__DeployResponse *resp = NULL;
     if (send_deploy_request(node, &req, &resp) < 0) {
@@ -804,18 +791,15 @@ static int satdeploy_verify_cmd(struct slash *slash)
     }
 
     if (!resp->success) {
-        printf("Verify failed: %s\n", resp->error_message);
+        printf("Logs failed: %s\n", resp->error_message);
         satdeploy__deploy_response__free_unpacked(resp, NULL);
         return SLASH_EIO;
     }
 
-    printf("Checksum: %s\n", resp->actual_checksum);
-    if (expected_checksum && strlen(expected_checksum) > 0) {
-        if (strncmp(resp->actual_checksum, expected_checksum, strlen(expected_checksum)) == 0) {
-            printf("Verification: MATCH\n");
-        } else {
-            printf("Verification: MISMATCH (expected %s)\n", expected_checksum);
-        }
+    if (resp->log_output && strlen(resp->log_output) > 0) {
+        printf("%s\n", resp->log_output);
+    } else {
+        printf("No logs available for %s\n", app_name);
     }
 
     satdeploy__deploy_response__free_unpacked(resp, NULL);
@@ -872,29 +856,22 @@ static int satdeploy_config_cmd(struct slash *slash)
 static int satdeploy_help_cmd(struct slash *slash)
 {
     (void)slash;
-    printf("satdeploy - Satellite binary deployment tool\n\n");
-    printf("Usage: satdeploy <command> [options]\n\n");
+    printf("  Deploy binaries to embedded Linux targets.\n\n");
     printf("Commands:\n");
-    printf("  config              Show current configuration\n");
-    printf("  status              Query agent status\n");
-    printf("  deploy <app>        Deploy a binary to the target\n");
-    printf("  list <app>          List available backups\n");
-    printf("  rollback <app>      Rollback to previous version\n");
-    printf("  verify <app>        Verify installed binary checksum\n");
-    printf("\nExamples:\n");
-    printf("  satdeploy deploy test-app           Deploy using config defaults\n");
-    printf("  satdeploy deploy -n 5424 test-app   Deploy to specific node\n");
-    printf("  satdeploy list test-app             Show backup history\n");
-    printf("  satdeploy rollback test-app         Restore previous version\n");
-    printf("\nConfiguration: ~/.satdeploy/config.yaml\n");
+    printf("  config    Show current configuration.\n");
+    printf("  list      List all versions of an app (deployed + backups).\n");
+    printf("  logs      Show logs for an app's service.\n");
+    printf("  push      Deploy one or more apps to a target.\n");
+    printf("  rollback  Rollback to a previous version.\n");
+    printf("  status    Show status of deployed apps and services.\n");
     return SLASH_SUCCESS;
 }
 
 slash_command_group(satdeploy, "Satellite binary deployment");
 slash_command_sub(satdeploy, help, satdeploy_help_cmd, NULL, "Show this help message");
-slash_command_sub(satdeploy, config, satdeploy_config_cmd, "", "Show current configuration");
-slash_command_sub(satdeploy, status, satdeploy_status_cmd, NULL, "Query agent status and list deployed apps");
-slash_command_sub(satdeploy, deploy, satdeploy_deploy_cmd, "<app> [options]", "Deploy a binary to the target");
-slash_command_sub(satdeploy, rollback, satdeploy_rollback_cmd, "<app> [-H hash]", "Rollback to previous version");
-slash_command_sub(satdeploy, list, satdeploy_list_cmd, "<app>", "List available backups for an app");
-slash_command_sub(satdeploy, verify, satdeploy_verify_cmd, "<app> [-r path] [-c checksum]", "Verify binary checksum");
+slash_command_sub(satdeploy, config, satdeploy_config_cmd, "", "Show current configuration.");
+slash_command_sub(satdeploy, push, satdeploy_deploy_cmd, "<app> [options]", "Deploy one or more apps to a target.");
+slash_command_sub(satdeploy, list, satdeploy_list_cmd, "<app>", "List all versions of an app (deployed + backups).");
+slash_command_sub(satdeploy, logs, satdeploy_logs_cmd, "<app> [-l lines]", "Show logs for an app's service.");
+slash_command_sub(satdeploy, rollback, satdeploy_rollback_cmd, "<app> [-H hash]", "Rollback to a previous version.");
+slash_command_sub(satdeploy, status, satdeploy_status_cmd, NULL, "Show status of deployed apps and services.");

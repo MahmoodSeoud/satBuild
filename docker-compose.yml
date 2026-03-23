@@ -8,12 +8,12 @@ services:
     command: >
       bash -c "
         cd /satbuild/satdeploy-apm &&
-        ([ -d build ] || meson setup build) &&
+        ([ -f build/build.ninja ] || meson setup build --wipe) &&
         ninja -C build &&
         cp build/libcsh_satdeploy_apm.so /root/.local/lib/csh/ &&
 
         cd /satbuild/satdeploy-agent &&
-        ([ -d build ] || meson setup build) &&
+        ([ -f build/build.ninja ] || meson setup build --wipe) &&
         ninja -C build &&
 
         echo '=== Build complete ==='
@@ -38,7 +38,10 @@ services:
       - .:/satbuild
     # -p zmqproxy: connect to zmqproxy by Docker DNS
     # -S/-P: match zmqproxy's custom ports
-    command: /satbuild/satdeploy-agent/build/satdeploy-agent -p zmqproxy -S 9600 -P 9601
+    command: [
+      "bash", "-c",
+      "stdbuf -oL /satbuild/satdeploy-agent/build/satdeploy-agent -p zmqproxy -S 9600 -P 9601 2>&1 | stdbuf -oL grep --line-buffered -v -E '\\[LOG\\]|\\[WARN\\]|^\\[0'"
+    ]
     depends_on:
       build:
         condition: service_completed_successfully

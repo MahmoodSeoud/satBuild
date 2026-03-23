@@ -28,7 +28,6 @@ from satdeploy.demo import (
     demo_stop,
     demo_status,
     demo_eject,
-    demo_watch,
 )
 from satdeploy.output import SatDeployError
 from satdeploy.transport.base import TransportError
@@ -324,29 +323,6 @@ class TestConfigDirEnvvar:
         assert "flag-host" in result.output
 
 
-class TestDemoWatch:
-    def test_watch_not_running(self, tmp_path):
-        with patch("satdeploy.demo._get_compose_file", return_value=tmp_path / "dc.yml"):
-            with patch("satdeploy.demo._is_agent_container_running", return_value=False):
-                with pytest.raises(SatDeployError, match="not running"):
-                    demo_watch()
-
-    def test_watch_streams_logs(self, tmp_path):
-        compose_file = tmp_path / "docker-compose.yml"
-        compose_file.write_text("services: {}")
-
-        with patch("satdeploy.demo._get_compose_file", return_value=compose_file):
-            with patch("satdeploy.demo._is_agent_container_running", return_value=True):
-                with patch("satdeploy.demo.subprocess.run") as mock_run:
-                    demo_watch()
-                    mock_run.assert_called_once()
-                    call_args = mock_run.call_args
-                    cmd = call_args[0][0]
-                    assert "logs" in cmd
-                    assert "-f" in cmd
-                    assert "agent" in cmd
-
-
 class TestDemoCLI:
     def test_demo_help(self):
         runner = CliRunner()
@@ -355,7 +331,7 @@ class TestDemoCLI:
         assert "start" in result.output
         assert "stop" in result.output
         assert "status" in result.output
-        assert "watch" in result.output
+        assert "shell" in result.output
         assert "eject" in result.output
 
     def test_demo_start_invokes_module(self):
@@ -376,11 +352,11 @@ class TestDemoCLI:
             result = runner.invoke(main, ["demo", "stop", "--clean"])
             mock_stop.assert_called_once_with(clean=True)
 
-    def test_demo_watch_invokes_module(self):
+    def test_demo_shell_invokes_module(self):
         runner = CliRunner()
-        with patch("satdeploy.demo.demo_watch") as mock_watch:
-            result = runner.invoke(main, ["demo", "watch"])
-            mock_watch.assert_called_once()
+        with patch("satdeploy.demo.demo_shell") as mock_shell:
+            result = runner.invoke(main, ["demo", "shell"])
+            mock_shell.assert_called_once()
 
     def test_demo_status_invokes_module(self):
         runner = CliRunner()

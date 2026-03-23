@@ -19,7 +19,7 @@ from satdeploy.transport.csp import CSPTransport
 from satdeploy.transport.base import TransportError
 
 
-DEMO_CONFIG_PATH = Path.home() / ".satdeploy" / ".demo-config.yaml"
+DEMO_CONFIG_PATH = Path.home() / ".satdeploy" / "config.yaml"
 DEMO_DIR = Path.home() / ".satdeploy" / "demo"
 GHCR_IMAGE = "ghcr.io/mahmoodseoud/satdeploy-sim:latest"
 
@@ -72,42 +72,30 @@ DEMO_CONFIG = {
 TUTORIAL_TEXT = """\
 
   You just started a simulated satellite running the satdeploy agent.
+  A test binary (test_app) is pre-installed and ready to deploy.
 
-  {line} Step 1: Watch the satellite {line2}
+  {line} Try these commands {line2}
 
-    Open a second terminal and run:
-    $ satdeploy demo watch
+    satdeploy status                  See what's deployed
+    satdeploy push test_app           Deploy a new version
+    satdeploy list test_app           See version history
+    satdeploy rollback test_app       Roll back to previous
+    satdeploy logs test_app           View service logs
 
-    This shows what the satellite agent receives in real time.
-    Keep it open — you'll see every command arrive.
+  {line} Explore the satellite {line3}
 
-  {line} Step 2: Open the ground station {line3}
+    satdeploy demo shell              Shell into the satellite
+                                      (agent logs stream live)
 
-    Open a third terminal and launch the CSH ground station:
+  {line} Ground station (CSH) {line4}
+
+    For the CSH ground station interface:
     $ docker compose run csh
-
-    CSH connects to the satellite automatically. The default
-    target node (5425) is already set. Try these commands:
-
-      csh> satdeploy status
-      csh> satdeploy deploy test_app
-      csh> satdeploy list test_app
-      csh> satdeploy rollback test_app
-      csh> satdeploy verify test_app
-
-    Watch the satellite terminal — you'll see each command
-    arrive, the backup, download, and install happen live.
-
-  {line} Scripted deploys (Python CLI) {line4}
-
-    For CI/automation, satdeploy also has a Python CLI:
-    $ satdeploy deploy test_app --config ~/.satdeploy/.demo-config.yaml
-    $ satdeploy status --config ~/.satdeploy/.demo-config.yaml
 
   {line} When you're done {line5}
 
-    Stop the demo:  satdeploy demo stop
-    Use with real hardware:  satdeploy demo eject
+    satdeploy demo stop               Stop the simulator
+    satdeploy demo eject              Generate config for real hardware
 """
 
 
@@ -261,9 +249,9 @@ def _print_tutorial() -> None:
     line = "\u2500" * 3
     click.echo(TUTORIAL_TEXT.format(
         line=line,
-        line2="\u2500" * 29,
-        line3="\u2500" * 26,
-        line4="\u2500" * 22,
+        line2="\u2500" * 33,
+        line3="\u2500" * 30,
+        line4="\u2500" * 29,
         line5="\u2500" * 31,
     ))
 
@@ -465,12 +453,36 @@ def demo_status() -> None:
         click.echo(f"  Mode:      standalone")
 
 
-def demo_watch() -> None:
-    """Stream the satellite agent's logs in real time.
+DIM = "\033[2m"
+BOLD = "\033[1m"
+RESET = "\033[0m"
+CYAN = "\033[36m"
 
-    Runs `docker compose logs -f agent` so the user can see what the
-    satellite does when it receives deploy/rollback/status commands.
-    Ctrl+C to stop watching.
+SATELLITE_BANNER = f"""
+{DIM}          ╭─────╮
+    ╔═══╗ │     │ ╔═══╗
+    ║ ░ ║─┤ SAT ├─║ ░ ║
+    ║ ░ ║ │ DPL │ ║ ░ ║
+    ╚═══╝ │     │ ╚═══╝
+          ╰──┬──╯
+             │
+           ╌╌╌╌╌{RESET}
+
+{BOLD}    satdeploy demo shell{RESET}
+{DIM}    simulated satellite · agent live{RESET}
+
+{DIM}    Deploy from another terminal and
+    watch the agent respond here.
+    Type {RESET}{CYAN}exit{RESET}{DIM} to return to ground.{RESET}
+"""
+
+
+def demo_shell() -> None:
+    """Open an interactive shell on the simulated satellite.
+
+    Drops into bash inside the agent container with live agent logs
+    streaming in the background, so you can see what the agent does
+    when commands arrive from the ground station.
     """
     compose_file = _get_compose_file()
 
@@ -479,16 +491,62 @@ def demo_watch() -> None:
             "Demo environment is not running. Start with: satdeploy demo start"
         )
 
-    click.echo("Watching satellite agent logs (Ctrl+C to stop)...")
-    click.echo("")
+    # Print the satellite banner
+    click.echo(SATELLITE_BANNER)
+
+    # Stream agent logs in background, fixing newlines for raw terminal output.
+    # Docker log output uses bare \n which doesn't return the cursor to column 0
+    # in a shared terminal — we translate to \r\n so logs display cleanly.
+    import sys
+    import threading
+
+    log_proc = subprocess.Popen(
+        ["docker", "compose", "-f", str(compose_file),
+         "logs", "-f", "--tail", "0", "--no-log-prefix", "agent"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+    )
+
+    def _stream_logs():
+        try:
+            for line in log_proc.stdout:
+                text = line.decode("utf-8", errors="replace").rstrip("\n\r")
+                if not text:
+                    continue
+                # Strip ANSI escape codes for filtering
+                import re
+                clean = re.sub(r'\x1b\[[0-9;]*m', '', text).strip()
+                if not clean:
+                    continue
+                # Filter out library internals and agent startup noise
+                if clean.startswith(("[LOG]", "[WARN]", "satdeploy-agent",
+                                    "Interface:", "Port/Device:",
+                                    "CSP node:", "Netmask:",
+                                    "ZMQ init", "Agent running",
+                                    "[deploy] Initializing",
+                                    "[deploy] Listening")):
+                    continue
+                sys.stdout.write(f"\r\033[2m{text}\033[0m\r\n")
+                sys.stdout.flush()
+        except (ValueError, OSError):
+            pass  # pipe closed
+
+    log_thread = threading.Thread(target=_stream_logs, daemon=True)
+    log_thread.start()
+
     try:
         subprocess.run(
             ["docker", "compose", "-f", str(compose_file),
-             "logs", "-f", "--tail", "20", "agent"],
-            timeout=None,
+             "exec", "agent", "/bin/bash"],
         )
     except KeyboardInterrupt:
-        click.echo("\nStopped watching.")
+        click.echo("\nShell closed.")
+    finally:
+        log_proc.terminate()
+        try:
+            log_proc.wait(timeout=3)
+        except subprocess.TimeoutExpired:
+            log_proc.kill()
 
 
 def demo_eject() -> None:

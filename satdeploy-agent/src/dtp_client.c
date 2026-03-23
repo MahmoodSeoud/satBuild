@@ -35,7 +35,8 @@ typedef struct {
 static void on_download_start(dtp_t *session) {
     download_ctx_t *ctx = (download_ctx_t *)dtp_session_get_user_ctx(session);
     if (ctx) {
-        printf("[dtp] Download started, expecting %u bytes\n", ctx->expected_size);
+        printf("[dtp]    downloading %u bytes...\n", ctx->expected_size);
+        fflush(stdout);
     }
 }
 
@@ -78,7 +79,8 @@ static bool on_download_data(dtp_t *session, csp_packet_t *packet) {
 static void on_download_end(dtp_t *session) {
     download_ctx_t *ctx = (download_ctx_t *)dtp_session_get_user_ctx(session);
     if (ctx) {
-        printf("[dtp] Download ended, wrote %u bytes\n", ctx->bytes_written);
+        /* logged in dtp_download_file after cleanup */
+        (void)ctx;
     }
 }
 
@@ -96,13 +98,11 @@ int dtp_download_file(uint32_t server_node, uint16_t payload_id,
         return -1;
     }
 
-    printf("[dtp] Downloading payload %u from node %u to %s\n",
-           payload_id, server_node, dest_path);
 
     /* Open destination file */
     FILE *fp = fopen(dest_path, "wb");
     if (fp == NULL) {
-        printf("[dtp] Error: Failed to open %s for writing\n", dest_path);
+        printf("\033[31m[dtp]    error: failed to open %s\033[0m\n", dest_path);
         return -1;
     }
 
@@ -134,7 +134,7 @@ int dtp_download_file(uint32_t server_node, uint16_t payload_id,
     );
 
     if (session == NULL) {
-        printf("[dtp] Error: Failed to create DTP session\n");
+        printf("\033[31m[dtp]    error: failed to create session\033[0m\n");
         fclose(fp);
         return -1;
     }
@@ -161,32 +161,33 @@ int dtp_download_file(uint32_t server_node, uint16_t payload_id,
     fclose(fp);
 
     if (ctx.error != 0) {
-        printf("[dtp] Error: Download failed (write error)\n");
+        printf("\033[31m[dtp]    error: write failed\033[0m\n");
         return -1;
     }
     /* Accept DTP_CANCELLED when all bytes were written — the DTP library
        may report cancelled if bytes_received tracking diverges from
        payload_size, even when the actual file data was fully written. */
     if (result != DTP_OK && result != DTP_CANCELLED) {
-        printf("[dtp] Error: Download failed (status=%d)\n", result);
+        printf("\033[31m[dtp]    error: download failed (status=%d)\033[0m\n", result);
         return -1;
     }
     if (result == DTP_CANCELLED && expected_size > 0 && ctx.bytes_written == expected_size) {
-        printf("[dtp] Warning: transfer cancelled but byte count matches (%u bytes) — verifying checksum\n",
-               expected_size);
+        /* transfer cancelled but byte count matches — proceed to checksum */
+        (void)0;
     } else if (result != DTP_OK) {
-        printf("[dtp] Error: Download incomplete (wrote %u/%u)\n",
+        printf("\033[31m[dtp]    error: incomplete (%u/%u bytes)\033[0m\n",
                ctx.bytes_written, expected_size);
         return -1;
     }
 
     /* Verify size if expected */
     if (expected_size > 0 && ctx.bytes_written != expected_size) {
-        printf("[dtp] Warning: Expected %u bytes, got %u\n",
+        printf("\033[33m[dtp]    warning: expected %u bytes, got %u\033[0m\n",
                expected_size, ctx.bytes_written);
         return -1;
     }
 
-    printf("[dtp] Download complete: %u bytes\n", ctx.bytes_written);
+    printf("[dtp]    complete (%u bytes)\n", ctx.bytes_written);
+    fflush(stdout);
     return 0;
 }
