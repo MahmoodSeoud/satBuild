@@ -69,13 +69,14 @@ void output_separator(int width);
  * Args:
  *   app_name: Application name
  *   status: "running", "stopped", "failed", "deployed", "not deployed"
- *   hash: Binary hash (8 chars) or "-"
+ *   hash: File hash (8 chars) or "-"
  *   path: Remote path (optional, can be NULL)
  *   is_running: Whether service is running (for symbol selection)
  *   has_service: Whether app has a service (vs library)
  */
 void output_status_row(const char *app_name, const char *status,
                        const char *hash, const char *path,
+                       const char *provenance,
                        int is_running, int has_service);
 
 /*
@@ -88,7 +89,7 @@ void output_versions_header(void);
  * Print a version row for backup listing.
  *
  * Args:
- *   hash: Binary hash
+ *   hash: File hash
  *   timestamp: Deployment timestamp
  *   is_deployed: Whether this version is currently deployed
  */

@@ -12,7 +12,7 @@ from satdeploy.config import DEFAULT_CONFIG_DIR, DEFAULT_CONFIG_FILE, Config, Mo
 from satdeploy.dependencies import DependencyResolver
 from satdeploy.deployer import Deployer
 from satdeploy.hash import compute_file_hash
-from satdeploy.provenance import capture_provenance, is_dirty
+from satdeploy.provenance import capture_provenance, is_dirty, resolve_provenance
 from satdeploy.history import DeploymentRecord, History
 from satdeploy.output import success, warning, step, SYMBOLS, SatDeployError, ColoredGroup
 from satdeploy.services import ServiceManager, ServiceStatus
@@ -68,19 +68,19 @@ def get_history(db_path: Path) -> History:
 
 
 def build_provenance_map(history: History, app: str) -> dict[str, str]:
-    """Build a mapping from binary hash to git provenance string.
+    """Build a mapping from file hash to git provenance string.
 
     Args:
         history: The history database.
         app: The app name to look up.
 
     Returns:
-        Dict mapping binary_hash to git_hash provenance string.
+        Dict mapping file_hash to git_hash provenance string.
     """
     prov_map = {}
     for rec in history.get_history(app):
-        if rec.binary_hash and rec.git_hash and rec.binary_hash not in prov_map:
-            prov_map[rec.binary_hash] = rec.git_hash
+        if rec.file_hash and rec.git_hash and rec.file_hash not in prov_map:
+            prov_map[rec.file_hash] = rec.git_hash
     return prov_map
 
 
@@ -405,7 +405,7 @@ def _install_completion(quiet: bool = False) -> bool:
 
 @click.group(cls=ColoredGroup)
 def main():
-    """Deploy binaries to embedded Linux targets."""
+    """Deploy files to embedded Linux targets."""
     pass
 
 
@@ -502,21 +502,32 @@ def completion(install: bool, uninstall: bool):
     "--local",
     type=click.Path(exists=False),
     default=None,
-    help="Override local path for the binary",
+    help="Override local path for the file",
+)
+@click.option(
+    "--remote",
+    "remote_override",
+    type=click.Path(),
+    default=None,
+    help="Remote path on target (enables ad-hoc push without config entry)",
 )
 @config_option
 @click.option("--dry-run", is_flag=True, help="Show what would happen without deploying")
 @click.option("-y", "--yes", is_flag=True, help="Skip confirmation prompts")
 @click.option("--require-clean", is_flag=True, help="Refuse to deploy from dirty git tree")
+@click.option("--provenance", "provenance_override", default=None,
+              help="Manual provenance string (overrides auto-detection from git/CI)")
 def push(
     apps: tuple[str, ...],
     all_apps: bool,
     clean_vmem: bool,
     local: str | None,
+    remote_override: str | None,
     config_path: Path | None,
     dry_run: bool,
     yes: bool,
     require_clean: bool,
+    provenance_override: str | None,
 ):
     """Deploy one or more apps to a target.
 
@@ -529,29 +540,85 @@ def push(
             f"Config not found at {config.config_path}. Run 'satdeploy init' first."
         )
 
-    # Handle --all vs app list
-    if not apps and not all_apps:
-        raise SatDeployError("Specify app names or use --all")
-    if apps and all_apps:
-        raise SatDeployError("Cannot use both app names and --all")
+    # Validate flag combinations
+    if remote_override and not local:
+        raise SatDeployError("--remote requires --local")
+    if remote_override and all_apps:
+        raise SatDeployError("Cannot use --remote with --all")
+    if remote_override and apps:
+        raise SatDeployError("Cannot specify app name with --remote. Use --local and --remote without an app name for ad-hoc push.")
 
-    if all_apps:
-        apps = tuple(config.get_all_app_names())
-        if not apps:
-            raise SatDeployError("No apps configured")
+    # Ad-hoc mode: --local + --remote without app name
+    adhoc_mode = bool(local and remote_override and not apps and not all_apps)
+    adhoc_app_configs = {}  # app_name -> AppConfig for ad-hoc apps
+
+    if adhoc_mode:
+        local_path = os.path.expanduser(local)
+        if not os.path.exists(local_path):
+            raise SatDeployError(f"Local file not found: {local_path}")
+
+        # Derive app name: basename, strip extension, dots to dashes
+        basename = os.path.basename(remote_override)
+        name_part, _ = os.path.splitext(basename)
+        derived_name = name_part.replace(".", "-")
+
+        # Avoid collision with configured apps
+        if config.get_app(derived_name) is not None:
+            derived_name = f"adhoc-{derived_name}"
+
+        apps = (derived_name,)
+        adhoc_app_configs[derived_name] = AppConfig(
+            name=derived_name,
+            local=local_path,
+            remote=remote_override,
+        )
+
+        # Show ad-hoc warning
+        file_size = os.path.getsize(local_path)
+        size_str = f"{file_size / 1024:.1f} KB" if file_size < 1024 * 1024 else f"{file_size / (1024 * 1024):.1f} MB"
+        click.echo(warning("Ad-hoc mode: pushing file directly without app configuration."))
+        click.echo(f"  {SYMBOLS['bullet']} No service restart or dependency ordering")
+        click.echo(f"  {SYMBOLS['bullet']} Backup will be created at the remote path")
+        click.echo(f"  {SYMBOLS['bullet']} Use 'satdeploy rollback {derived_name}' to restore")
+        click.echo(f"  {SYMBOLS['arrow']} {derived_name}")
+        click.echo(f"    local:  {local_path} ({size_str})")
+        click.echo(f"    remote: {remote_override}")
+
+        if not yes and not dry_run:
+            if not click.confirm("Continue?"):
+                click.echo("Aborted.")
+                return
+    else:
+        # Handle --all vs app list
+        if not apps and not all_apps:
+            raise SatDeployError("Specify app names or use --all")
+        if apps and all_apps:
+            raise SatDeployError("Cannot use both app names and --all")
+
+        if all_apps:
+            apps = tuple(config.get_all_app_names())
+            if not apps:
+                raise SatDeployError("No apps configured")
 
     module_config = config.get_target()
 
     # Only allow single app when using --local override
-    if local and len(apps) > 1:
+    if local and len(apps) > 1 and not adhoc_mode:
         raise SatDeployError("--local can only be used with a single app")
 
-    # Validate all apps exist and have local files
-    for app_name in apps:
-        app_cfg = get_app_config_or_error(config, app_name)
-        local_path_check = os.path.expanduser(local or app_cfg.local) if len(apps) == 1 else os.path.expanduser(app_cfg.local)
-        if not os.path.exists(local_path_check):
-            raise SatDeployError(f"Local file not found: {local_path_check}")
+    # Validate all apps exist and have local files (skip for ad-hoc — already validated)
+    if not adhoc_mode:
+        for app_name in apps:
+            app_cfg = get_app_config_or_error(config, app_name)
+            local_path_check = os.path.expanduser(local or app_cfg.local) if len(apps) == 1 else os.path.expanduser(app_cfg.local)
+            if not os.path.exists(local_path_check):
+                raise SatDeployError(f"Local file not found: {local_path_check}")
+
+    # Helper to resolve app config: ad-hoc map first, then config lookup
+    def _get_app_cfg(name: str) -> AppConfig:
+        if name in adhoc_app_configs:
+            return adhoc_app_configs[name]
+        return get_app_config_or_error(config, name)
 
     # Dry-run: show what would happen and exit
     if dry_run:
@@ -560,7 +627,7 @@ def push(
         click.echo(f"Target: {target_name} ({module_config.transport})")
         click.echo("")
         for app_name in apps:
-            app_cfg = get_app_config_or_error(config, app_name)
+            app_cfg = _get_app_cfg(app_name)
             lp = os.path.expanduser(local or app_cfg.local) if len(apps) == 1 else os.path.expanduser(app_cfg.local)
             file_size = os.path.getsize(lp)
             local_hash = compute_file_hash(lp)
@@ -576,21 +643,23 @@ def push(
         click.echo("Run without --dry-run to deploy.")
         return
 
-    # Capture git provenance for each app (fail fast before connecting)
-    provenance_map = {}
+    # Resolve provenance for each app (fail fast before connecting)
+    # Priority: --provenance flag > CI env vars > local git state
+    provenance_map = {}  # app_name -> (provenance_string, source)
     for app_name in apps:
-        app_cfg = get_app_config_or_error(config, app_name)
+        app_cfg = _get_app_cfg(app_name)
         local_path_prov = os.path.expanduser(local or app_cfg.local) if len(apps) == 1 else os.path.expanduser(app_cfg.local)
-        provenance = capture_provenance(local_path_prov)
-        provenance_map[app_name] = provenance
+        provenance, prov_source = resolve_provenance(local_path_prov, manual_override=provenance_override)
+        provenance_map[app_name] = (provenance, prov_source)
 
-        if require_clean and is_dirty(provenance):
+        # --require-clean only applies to local git provenance
+        if require_clean and prov_source == "local" and is_dirty(provenance):
             raise SatDeployError(
                 "Refusing to deploy from dirty git tree. Commit your changes first."
             )
 
-        if is_dirty(provenance):
-            click.echo(warning(f"Deploying from uncommitted changes — binary tagged as {provenance}"))
+        if prov_source == "local" and is_dirty(provenance):
+            click.echo(warning(f"Deploying from uncommitted changes — file tagged as {provenance}"))
 
     # Confirmation prompt for multi-app deploys
     if len(apps) > 1 and not yes:
@@ -613,7 +682,7 @@ def push(
             transport.connect()
 
             for app in apps:
-                app_config = get_app_config_or_error(config, app)
+                app_config = _get_app_cfg(app)
                 local_path = os.path.expanduser(local or app_config.local) if len(apps) == 1 else os.path.expanduser(app_config.local)
                 remote_path = app_config.remote
 
@@ -658,16 +727,18 @@ def push(
                         except TransportError:
                             click.echo(warning(f"Health check: status query timed out"))
 
-                    provenance = provenance_map.get(app)
+                    prov_tuple = provenance_map.get(app, (None, "local"))
+                    provenance, prov_source = prov_tuple
                     history.record(DeploymentRecord(
                         module=config.module_name,
                         app=app,
-                        binary_hash=local_hash,
+                        file_hash=local_hash,
                         remote_path=remote_path,
                         backup_path=result.backup_path,
                         action="push",
                         success=True,
                         git_hash=provenance,
+                        provenance_source=prov_source,
                     ))
                     provenance_display = f" ({provenance})" if provenance else ""
                     click.echo(success(f"Deployed {app} ({local_hash}){provenance_display}"))
@@ -675,7 +746,7 @@ def push(
                     history.record(DeploymentRecord(
                         module=config.module_name,
                         app=app,
-                        binary_hash="",
+                        file_hash="",
                         remote_path=remote_path,
                         action="push",
                         success=False,
@@ -689,7 +760,7 @@ def push(
             history.record(DeploymentRecord(
                 module=config.module_name,
                 app=failed_app,
-                binary_hash="",
+                file_hash="",
                 remote_path="",
                 action="push",
                 success=False,
@@ -706,6 +777,9 @@ def push(
         name: {"remote": cfg.get("remote", ""), "service": cfg.get("service")}
         for name, cfg in config.apps.items()
     } if config.apps else {}
+    # Include ad-hoc apps in transport config
+    for name, acfg in adhoc_app_configs.items():
+        apps_dict[name] = {"remote": acfg.remote, "service": None}
     transport = get_transport(module_config, config.backup_dir, apps=apps_dict)
     click.echo(f"Connecting to {module_config.host}...")
 
@@ -713,12 +787,12 @@ def push(
         transport.connect()
 
         for app in apps:
-            app_config = get_app_config_or_error(config, app)
+            app_config = _get_app_cfg(app)
             local_path = os.path.expanduser(local or app_config.local) if len(apps) == 1 else os.path.expanduser(app_config.local)
             remote_path = app_config.remote
             service = app_config.service
 
-            services_to_manage = get_services_to_manage(config, app, service)
+            services_to_manage = [] if app in adhoc_app_configs else get_services_to_manage(config, app, service)
 
             click.echo(f"Deploying {app}...")
 
@@ -730,7 +804,7 @@ def push(
             )
 
             if result.success:
-                local_hash = result.binary_hash or compute_file_hash(local_path)
+                local_hash = result.file_hash or compute_file_hash(local_path)
 
                 # Sync service file if transport exposes SSH internals
                 service_hash = None
@@ -740,17 +814,19 @@ def push(
                         app_config, module_config,
                     )
 
-                provenance = provenance_map.get(app)
+                prov_tuple = provenance_map.get(app, (None, "local"))
+                provenance, prov_source = prov_tuple
                 history.record(DeploymentRecord(
                     module=config.module_name,
                     app=app,
-                    binary_hash=local_hash,
+                    file_hash=local_hash,
                     remote_path=remote_path,
                     backup_path=result.backup_path,
                     action="push",
                     success=True,
                     service_hash=service_hash,
                     git_hash=provenance,
+                    provenance_source=prov_source,
                 ))
 
                 provenance_display = f" ({provenance})" if provenance else ""
@@ -774,7 +850,7 @@ def push(
                 history.record(DeploymentRecord(
                     module=config.module_name,
                     app=app,
-                    binary_hash="",
+                    file_hash="",
                     remote_path=remote_path,
                     action="push",
                     success=False,
@@ -787,7 +863,7 @@ def push(
         history.record(DeploymentRecord(
             module=config.module_name,
             app=failed_app,
-            binary_hash="",
+            file_hash="",
             remote_path="",
             action="push",
             success=False,
@@ -821,12 +897,19 @@ def status(config_path: Path | None):
         click.echo(f"Target: node {module_config.agent_node}")
         click.echo("")
 
-        if not apps:
-            click.echo("No apps configured.")
+        # Collect all app names: configured + any ad-hoc from history
+        all_app_names = list(apps.keys()) if apps else []
+        module_state = history.get_module_state(config.module_name)
+        # Only show ad-hoc apps that had at least one successful deploy
+        adhoc_apps = [name for name in module_state
+                      if name not in all_app_names and module_state[name].success]
+
+        if not all_app_names and not adhoc_apps:
+            click.echo("No apps configured or deployed.")
             return
 
         # Print header
-        header = f"    {'APP':<16}\t{'STATUS':<14}\t{'HASH':<10}\t{'TIMESTAMP'}"
+        header = f"    {'APP':<16}\t{'STATUS':<14}\t{'HASH':<10}\t{'PATH'}"
         click.echo(click.style(header, fg="bright_black"))
         click.echo(click.style("    " + "-" * 60, fg="bright_black"))
 
@@ -834,31 +917,41 @@ def status(config_path: Path | None):
             transport.connect()
             app_statuses = transport.get_status()
 
-            for app_name, app_config_dict in apps.items():
+            for app_name in all_app_names + adhoc_apps:
                 app_status = app_statuses.get(app_name)
 
                 if app_status:
-                    hash_display = app_status.binary_hash or "-"
+                    hash_display = app_status.file_hash or "-"
+                    remote_path = app_status.remote_path or ""
                     if app_status.running:
                         symbol = click.style(SYMBOLS["check"], fg="green")
                         status_text = "running"
                         status_color = "green"
                     else:
-                        symbol = click.style(SYMBOLS["bullet"], fg="yellow")
-                        status_text = "stopped"
-                        status_color = "yellow"
+                        symbol = click.style(SYMBOLS["bullet"], fg="green")
+                        status_text = "deployed"
+                        status_color = "green"
 
-                    # Get timestamp and git provenance from history
+                    # Get git provenance from history
                     last_deploy = history.get_last_deployment(app_name)
-                    timestamp_display = format_iso_timestamp(last_deploy.timestamp) if last_deploy and last_deploy.success else "-"
                     git_prov = last_deploy.git_hash if last_deploy and last_deploy.success else None
                 else:
-                    symbol = click.style(SYMBOLS["bullet"], fg="yellow")
-                    status_text = "not deployed"
-                    status_color = "yellow"
-                    hash_display = "-"
-                    timestamp_display = "-"
-                    git_prov = None
+                    # Not in agent status — check history for previous deploys
+                    last_deploy = module_state.get(app_name)
+                    if last_deploy and last_deploy.success:
+                        symbol = click.style(SYMBOLS["bullet"], fg="bright_black")
+                        status_text = "deployed"
+                        status_color = "bright_black"
+                        hash_display = last_deploy.file_hash or "-"
+                        remote_path = last_deploy.remote_path or ""
+                        git_prov = last_deploy.git_hash
+                    else:
+                        symbol = click.style(SYMBOLS["bullet"], fg="yellow")
+                        status_text = "not deployed"
+                        status_color = "yellow"
+                        hash_display = "-"
+                        remote_path = ""
+                        git_prov = None
 
                 name_col = f"{app_name:<16}"
                 status_col = f"{status_text:<14}"
@@ -871,7 +964,7 @@ def status(config_path: Path | None):
                     f"  {symbol} {name_col}\t"
                     f"{click.style(status_col, fg=status_color)}\t"
                     f"{click.style(hash_col, fg='white')}\t"
-                    f"{click.style(timestamp_display, fg='bright_black')}"
+                    f"{click.style(remote_path, fg='bright_black')}"
                 )
 
         except TransportError as e:
@@ -886,12 +979,18 @@ def status(config_path: Path | None):
     click.echo(f"Target: {target['host']} ({target['user']})")
     click.echo("")
 
-    if not apps:
-        click.echo("No apps configured.")
+    # Collect all app names: configured + any ad-hoc from history
+    ssh_all_app_names = list(apps.keys()) if apps else []
+    ssh_module_state = history.get_module_state(config.module_name)
+    ssh_adhoc_apps = [name for name in ssh_module_state
+                      if name not in ssh_all_app_names and ssh_module_state[name].success]
+
+    if not ssh_all_app_names and not ssh_adhoc_apps:
+        click.echo("No apps configured or deployed.")
         return
 
     # Print header
-    header = f"    {'APP':<16}\t{'STATUS':<14}\t{'HASH':<10}\t{'TIMESTAMP'}"
+    header = f"    {'APP':<16}\t{'STATUS':<14}\t{'HASH':<10}\t{'PATH'}"
     click.echo(click.style(header, fg="bright_black"))
     click.echo(click.style("    " + "-" * 60, fg="bright_black"))
 
@@ -899,22 +998,26 @@ def status(config_path: Path | None):
         with SSHClient(host=target["host"], user=target["user"]) as ssh:
             service_manager = ServiceManager(ssh)
 
-            for app_name, app_config in apps.items():
+            # Build combined app configs: configured apps + ad-hoc from history
+            all_apps_to_show = dict(apps) if apps else {}
+            for adhoc_name in ssh_adhoc_apps:
+                rec = ssh_module_state[adhoc_name]
+                all_apps_to_show[adhoc_name] = {"remote": rec.remote_path, "service": None, "_adhoc": True}
+
+            for app_name, app_config in all_apps_to_show.items():
                 service = app_config.get("service")
-                remote_path = app_config.get("remote")
+                remote_path = app_config.get("remote", "")
 
                 # First check if file exists
                 deployed = ssh.file_exists(remote_path)
 
-                # Get hash, timestamp, and git provenance from history (only if actually deployed)
+                # Get hash and git provenance from history (only if actually deployed)
                 hash_display = "-"
-                timestamp_display = "-"
                 git_prov = None
                 if deployed:
                     last_deploy = history.get_last_deployment(app_name)
                     if last_deploy and last_deploy.success:
-                        hash_display = last_deploy.binary_hash or "-"
-                        timestamp_display = format_iso_timestamp(last_deploy.timestamp)
+                        hash_display = last_deploy.file_hash or "-"
                         git_prov = last_deploy.git_hash
 
                 if not deployed:
@@ -946,20 +1049,18 @@ def status(config_path: Path | None):
                     status_text = "deployed"
                     status_color = "green"
 
-                # Pad plain text first, then colorize
                 name_col = f"{app_name:<16}"
                 status_col = f"{status_text:<14}"
                 hash_text = hash_display
                 if git_prov:
                     hash_text += f" ({git_prov})"
                 hash_col = f"{hash_text:<10}"
-                timestamp_col = timestamp_display
 
                 click.echo(
                     f"  {symbol} {name_col}\t"
                     f"{click.style(status_col, fg=status_color)}\t"
                     f"{click.style(hash_col, fg='white')}\t"
-                    f"{click.style(timestamp_col, fg='bright_black')}"
+                    f"{click.style(remote_path, fg='bright_black')}"
                 )
 
     except SSHError as e:
@@ -1002,15 +1103,15 @@ def list_backups(app: str, config_path: Path | None):
             # Get currently deployed hash
             current_hash = None
             if last_deploy and last_deploy.success:
-                current_hash = last_deploy.binary_hash
+                current_hash = last_deploy.file_hash
 
             # Convert BackupInfo to dict format and deduplicate
             seen_keys = {}
             for backup in backup_infos:
-                key = backup.binary_hash or backup.version
+                key = backup.file_hash or backup.version
                 if key and key not in seen_keys:
                     seen_keys[key] = {
-                        "hash": backup.binary_hash,
+                        "hash": backup.file_hash,
                         "timestamp": backup.timestamp,
                         "path": backup.path,
                     }
@@ -1085,7 +1186,7 @@ def list_backups(app: str, config_path: Path | None):
             # Get currently deployed hash
             current_hash = None
             if last_deploy and last_deploy.success:
-                current_hash = last_deploy.binary_hash
+                current_hash = last_deploy.file_hash
 
             # Deduplicate backups by hash, keeping most recent (first in list)
             seen_keys = {}
@@ -1190,7 +1291,7 @@ def rollback(app: str, hash: str | None, config_path: Path | None):  # noqa: A00
                 history.record(DeploymentRecord(
                     module=config.module_name,
                     app=app,
-                    binary_hash=actual_hash,
+                    file_hash=actual_hash,
                     remote_path="",
                     action="rollback",
                     success=True,
@@ -1203,7 +1304,7 @@ def rollback(app: str, hash: str | None, config_path: Path | None):  # noqa: A00
                 history.record(DeploymentRecord(
                     module=config.module_name,
                     app=app,
-                    binary_hash="",
+                    file_hash="",
                     remote_path="",
                     action="rollback",
                     success=False,
@@ -1215,7 +1316,7 @@ def rollback(app: str, hash: str | None, config_path: Path | None):  # noqa: A00
             history.record(DeploymentRecord(
                 module=config.module_name,
                 app=app,
-                binary_hash="",
+                file_hash="",
                 remote_path="",
                 action="rollback",
                 success=False,
@@ -1266,7 +1367,7 @@ def rollback(app: str, hash: str | None, config_path: Path | None):  # noqa: A00
 
             # Get currently deployed hash to find position in version history
             last_deploy = history.get_last_deployment(app)
-            current_hash = last_deploy.binary_hash if last_deploy and last_deploy.success else None
+            current_hash = last_deploy.file_hash if last_deploy and last_deploy.success else None
 
             if target_hash:
                 # Match by hash prefix
@@ -1326,7 +1427,7 @@ def rollback(app: str, hash: str | None, config_path: Path | None):  # noqa: A00
             history.record(DeploymentRecord(
                 module=config.module_name,
                 app=app,
-                binary_hash=backup_hash,
+                file_hash=backup_hash,
                 remote_path=remote_path,
                 backup_path=backup_path,
                 action="rollback",
@@ -1340,7 +1441,7 @@ def rollback(app: str, hash: str | None, config_path: Path | None):  # noqa: A00
         history.record(DeploymentRecord(
             module=config.module_name,
             app=app,
-            binary_hash="",
+            file_hash="",
             remote_path=remote_path,
             backup_path=backup_path or "",
             action="rollback",

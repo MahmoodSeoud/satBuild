@@ -8,6 +8,7 @@ import yaml
 from click.testing import CliRunner
 
 from satdeploy.cli import main
+from satdeploy.history import History
 from satdeploy.output import SYMBOLS
 from satdeploy.transport.base import DeployResult
 
@@ -30,7 +31,7 @@ def make_mock_transport(deploy_result=None):
     transport = MagicMock()
     if deploy_result is None:
         deploy_result = DeployResult(
-            success=True, binary_hash="abcd1234", backup_path="/backups/test.bak"
+            success=True, file_hash="abcd1234", backup_path="/backups/test.bak"
         )
     transport.deploy.return_value = deploy_result
     transport.get_status.return_value = {}
@@ -454,7 +455,7 @@ class TestPushWithDependencies:
         )
 
         transport = make_mock_transport(
-            DeployResult(success=True, binary_hash="abcd1234", skipped=True)
+            DeployResult(success=True, file_hash="abcd1234", skipped=True)
         )
         mock_get_transport.return_value = transport
 
@@ -491,7 +492,7 @@ class TestPushWithDependencies:
 
         transport = make_mock_transport(
             DeployResult(
-                success=True, binary_hash="abcd1234",
+                success=True, file_hash="abcd1234",
                 restored=True, backup_path="/backups/test.bak",
             )
         )
@@ -555,8 +556,8 @@ class TestPushHistoryLogging:
         assert records[0].module == "som1"
 
     @patch("satdeploy.cli.get_transport")
-    def test_push_logs_binary_hash(self, mock_get_transport, tmp_path):
-        """Push should record the binary hash in history."""
+    def test_push_logs_file_hash(self, mock_get_transport, tmp_path):
+        """Push should record the file hash in history."""
         from satdeploy.history import History
 
         runner = CliRunner()
@@ -591,8 +592,8 @@ class TestPushHistoryLogging:
 
         history = History(config_dir / "history.db")
         records = history.get_history("controller")
-        assert records[0].binary_hash is not None
-        assert len(records[0].binary_hash) == 8  # First 8 chars of SHA256
+        assert records[0].file_hash is not None
+        assert len(records[0].file_hash) == 8  # First 8 chars of SHA256
 
     @patch("satdeploy.cli.get_transport")
     def test_push_logs_failed_deployment(self, mock_get_transport, tmp_path):
@@ -956,7 +957,7 @@ class TestPushHealthCheck:
 class TestPushProvenance:
     """Test git provenance tracking on push."""
 
-    @patch("satdeploy.cli.capture_provenance", return_value="main@abc12345")
+    @patch("satdeploy.cli.resolve_provenance", return_value=("main@abc12345", "local"))
     @patch("satdeploy.cli.get_transport")
     def test_push_captures_provenance(self, mock_get_transport, mock_provenance, tmp_path):
         """Push should show provenance string and record git_hash in history."""
@@ -998,7 +999,7 @@ class TestPushProvenance:
         assert len(records) == 1
         assert records[0].git_hash == "main@abc12345"
 
-    @patch("satdeploy.cli.capture_provenance", return_value="main@abc12345-dirty")
+    @patch("satdeploy.cli.resolve_provenance", return_value=("main@abc12345-dirty", "local"))
     @patch("satdeploy.cli.get_transport")
     def test_push_require_clean_rejects_dirty(self, mock_get_transport, mock_provenance, tmp_path):
         """Push with --require-clean should reject dirty git tree."""
@@ -1031,7 +1032,7 @@ class TestPushProvenance:
         assert "dirty" in result.output.lower()
         mock_get_transport.assert_not_called()
 
-    @patch("satdeploy.cli.capture_provenance", return_value="main@abc12345")
+    @patch("satdeploy.cli.resolve_provenance", return_value=("main@abc12345", "local"))
     @patch("satdeploy.cli.get_transport")
     def test_push_require_clean_allows_clean(self, mock_get_transport, mock_provenance, tmp_path):
         """Push with --require-clean should succeed when tree is clean."""
@@ -1066,7 +1067,7 @@ class TestPushProvenance:
         assert result.exit_code == 0
         assert "deployed" in result.output.lower() or "success" in result.output.lower()
 
-    @patch("satdeploy.cli.capture_provenance", return_value="main@abc12345-dirty")
+    @patch("satdeploy.cli.resolve_provenance", return_value=("main@abc12345-dirty", "local"))
     @patch("satdeploy.cli.get_transport")
     def test_push_warns_on_dirty_tree(self, mock_get_transport, mock_provenance, tmp_path):
         """Push without --require-clean should warn on dirty tree but succeed."""
@@ -1103,7 +1104,7 @@ class TestPushProvenance:
         # Deploy should still succeed
         assert "deployed" in result.output.lower() or "success" in result.output.lower()
 
-    @patch("satdeploy.cli.capture_provenance", return_value=None)
+    @patch("satdeploy.cli.resolve_provenance", return_value=(None, "local"))
     @patch("satdeploy.cli.get_transport")
     def test_push_no_provenance_when_not_git_repo(self, mock_get_transport, mock_provenance, tmp_path):
         """Push should succeed without provenance when not in a git repo."""
@@ -1146,3 +1147,272 @@ class TestPushProvenance:
         records = history.get_history("controller")
         assert len(records) == 1
         assert records[0].git_hash is None
+
+
+class TestAdhocPush:
+    """Tests for ad-hoc push mode (--local + --remote without app name)."""
+
+    @patch("satdeploy.cli.get_transport")
+    def test_adhoc_push_succeeds(self, mock_get_transport, tmp_path):
+        """Ad-hoc push with --local and --remote should deploy without config entry."""
+        runner = CliRunner()
+        config_dir = tmp_path / ".satdeploy"
+        config_dir.mkdir()
+        config_file = config_dir / "config.yaml"
+        config_file.write_text(yaml.dump(make_config({})))
+
+        payload = tmp_path / "test-payload.txt"
+        payload.write_text("hello satellite")
+
+        transport = make_mock_transport()
+        mock_get_transport.return_value = transport
+
+        result = runner.invoke(
+            main,
+            [
+                "push",
+                "--local", str(payload),
+                "--remote", "/opt/test/payload.txt",
+                "--config", str(config_file),
+                "-y",
+            ],
+        )
+
+        assert result.exit_code == 0, result.output
+        assert "Ad-hoc mode" in result.output
+        transport.deploy.assert_called_once()
+        deploy_call = transport.deploy.call_args
+        assert deploy_call.kwargs["remote_path"] == "/opt/test/payload.txt"
+        assert deploy_call.kwargs["app_name"] == "payload"
+
+    @patch("satdeploy.cli.get_transport")
+    def test_adhoc_push_derives_app_name_from_remote(self, mock_get_transport, tmp_path):
+        """App name should be derived from remote path basename without extension."""
+        runner = CliRunner()
+        config_dir = tmp_path / ".satdeploy"
+        config_dir.mkdir()
+        config_file = config_dir / "config.yaml"
+        config_file.write_text(yaml.dump(make_config({})))
+
+        payload = tmp_path / "myfile.bin"
+        payload.write_bytes(b"\x00" * 32)
+
+        transport = make_mock_transport()
+        mock_get_transport.return_value = transport
+
+        result = runner.invoke(
+            main,
+            [
+                "push",
+                "--local", str(payload),
+                "--remote", "/opt/disco/bin/controller",
+                "--config", str(config_file),
+                "-y",
+            ],
+        )
+
+        assert result.exit_code == 0, result.output
+        deploy_call = transport.deploy.call_args
+        assert deploy_call.kwargs["app_name"] == "controller"
+
+    @patch("satdeploy.cli.get_transport")
+    def test_adhoc_push_avoids_name_collision(self, mock_get_transport, tmp_path):
+        """Ad-hoc push should prefix with adhoc- if name collides with configured app."""
+        runner = CliRunner()
+        config_dir = tmp_path / ".satdeploy"
+        config_dir.mkdir()
+
+        # Config has a "controller" app
+        existing_binary = tmp_path / "controller"
+        existing_binary.write_bytes(b"existing")
+        config_file = config_dir / "config.yaml"
+        config_file.write_text(yaml.dump(make_config({
+            "controller": {
+                "local": str(existing_binary),
+                "remote": "/opt/disco/bin/controller",
+                "service": "controller.service",
+            }
+        })))
+
+        payload = tmp_path / "new-controller.bin"
+        payload.write_bytes(b"new content")
+
+        transport = make_mock_transport()
+        mock_get_transport.return_value = transport
+
+        result = runner.invoke(
+            main,
+            [
+                "push",
+                "--local", str(payload),
+                "--remote", "/opt/disco/bin/controller",
+                "--config", str(config_file),
+                "-y",
+            ],
+        )
+
+        assert result.exit_code == 0, result.output
+        deploy_call = transport.deploy.call_args
+        assert deploy_call.kwargs["app_name"] == "adhoc-controller"
+
+    def test_adhoc_push_fails_without_remote(self, tmp_path):
+        """--local without --remote and no app name should fail."""
+        runner = CliRunner()
+        config_dir = tmp_path / ".satdeploy"
+        config_dir.mkdir()
+        config_file = config_dir / "config.yaml"
+        config_file.write_text(yaml.dump(make_config({})))
+
+        payload = tmp_path / "test.txt"
+        payload.write_text("test")
+
+        result = runner.invoke(
+            main,
+            [
+                "push",
+                "--local", str(payload),
+                "--config", str(config_file),
+            ],
+        )
+
+        assert result.exit_code != 0
+
+    def test_adhoc_push_fails_with_remote_and_app_name(self, tmp_path):
+        """--remote with an app name should fail."""
+        runner = CliRunner()
+        config_dir = tmp_path / ".satdeploy"
+        config_dir.mkdir()
+        config_file = config_dir / "config.yaml"
+        config_file.write_text(yaml.dump(make_config({})))
+
+        payload = tmp_path / "test.txt"
+        payload.write_text("test")
+
+        result = runner.invoke(
+            main,
+            [
+                "push", "myapp",
+                "--local", str(payload),
+                "--remote", "/opt/test.txt",
+                "--config", str(config_file),
+            ],
+        )
+
+        assert result.exit_code != 0
+        assert "Cannot specify app name" in result.output
+
+    def test_adhoc_push_fails_remote_without_local(self, tmp_path):
+        """--remote without --local should fail."""
+        runner = CliRunner()
+        config_dir = tmp_path / ".satdeploy"
+        config_dir.mkdir()
+        config_file = config_dir / "config.yaml"
+        config_file.write_text(yaml.dump(make_config({})))
+
+        result = runner.invoke(
+            main,
+            [
+                "push",
+                "--remote", "/opt/test.txt",
+                "--config", str(config_file),
+            ],
+        )
+
+        assert result.exit_code != 0
+        assert "--remote requires --local" in result.output
+
+    @patch("satdeploy.cli.get_transport")
+    def test_adhoc_push_records_history(self, mock_get_transport, tmp_path):
+        """Ad-hoc push should record deployment in history.db."""
+        runner = CliRunner()
+        config_dir = tmp_path / ".satdeploy"
+        config_dir.mkdir()
+        config_file = config_dir / "config.yaml"
+        config_file.write_text(yaml.dump(make_config({})))
+
+        payload = tmp_path / "test-payload.txt"
+        payload.write_text("hello satellite")
+
+        transport = make_mock_transport()
+        mock_get_transport.return_value = transport
+
+        result = runner.invoke(
+            main,
+            [
+                "push",
+                "--local", str(payload),
+                "--remote", "/opt/test/payload.txt",
+                "--config", str(config_file),
+                "-y",
+            ],
+        )
+
+        assert result.exit_code == 0, result.output
+
+        history = History(config_dir / "history.db")
+        records = history.get_history("payload")
+        assert len(records) == 1
+        assert records[0].remote_path == "/opt/test/payload.txt"
+        assert records[0].success is True
+
+    @patch("satdeploy.cli.get_transport")
+    def test_adhoc_push_shows_warning_and_prompts(self, mock_get_transport, tmp_path):
+        """Ad-hoc push without -y should show warning and prompt."""
+        runner = CliRunner()
+        config_dir = tmp_path / ".satdeploy"
+        config_dir.mkdir()
+        config_file = config_dir / "config.yaml"
+        config_file.write_text(yaml.dump(make_config({})))
+
+        payload = tmp_path / "test.txt"
+        payload.write_text("test")
+
+        transport = make_mock_transport()
+        mock_get_transport.return_value = transport
+
+        # Answer 'n' to the confirmation prompt
+        result = runner.invoke(
+            main,
+            [
+                "push",
+                "--local", str(payload),
+                "--remote", "/opt/test.txt",
+                "--config", str(config_file),
+            ],
+            input="n\n",
+        )
+
+        assert "Ad-hoc mode" in result.output
+        assert "Continue?" in result.output
+        transport.deploy.assert_not_called()
+
+    @patch("satdeploy.cli.get_transport")
+    def test_adhoc_push_no_service_restart(self, mock_get_transport, tmp_path):
+        """Ad-hoc push should not pass services to transport.deploy."""
+        runner = CliRunner()
+        config_dir = tmp_path / ".satdeploy"
+        config_dir.mkdir()
+        config_file = config_dir / "config.yaml"
+        config_file.write_text(yaml.dump(make_config({})))
+
+        payload = tmp_path / "test.txt"
+        payload.write_text("test")
+
+        transport = make_mock_transport()
+        mock_get_transport.return_value = transport
+
+        result = runner.invoke(
+            main,
+            [
+                "push",
+                "--local", str(payload),
+                "--remote", "/opt/test.txt",
+                "--config", str(config_file),
+                "-y",
+            ],
+        )
+
+        assert result.exit_code == 0, result.output
+        deploy_call = transport.deploy.call_args
+        services = deploy_call.kwargs.get("services")
+        assert services is None or services == []

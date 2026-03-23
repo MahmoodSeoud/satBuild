@@ -39,6 +39,7 @@ void output_separator(int width)
 
 void output_status_row(const char *app_name, const char *status,
                        const char *hash, const char *path,
+                       const char *provenance,
                        int is_running, int has_service)
 {
     const char *symbol;
@@ -62,6 +63,11 @@ void output_status_row(const char *app_name, const char *status,
         symbol = SYM_BULLET;
         symbol_color = COLOR_YELLOW;
         status_color = COLOR_YELLOW;
+    } else if (strcmp(status, "deployed") == 0) {
+        /* File on target, no running process */
+        symbol = SYM_BULLET;
+        symbol_color = COLOR_GREEN;
+        status_color = COLOR_GREEN;
     } else {
         /* stopped or other */
         symbol = SYM_BULLET;
@@ -69,11 +75,20 @@ void output_status_row(const char *app_name, const char *status,
         status_color = COLOR_YELLOW;
     }
 
-    printf("  %s%s%s %-*s\t%s%-*s%s\t%s%-*s%s\t%s%s%s\n",
+    /* Build hash column: "abcd1234 (main@deadbeef)" or just "abcd1234" */
+    char hash_col[64];
+    const char *h = hash ? hash : "-";
+    if (provenance && provenance[0]) {
+        snprintf(hash_col, sizeof(hash_col), "%s (%s)", h, provenance);
+    } else {
+        snprintf(hash_col, sizeof(hash_col), "%s", h);
+    }
+
+    printf("  %s%s%s %-*s\t%s%-*s%s\t%s%-10s%s\t%s%s%s\n",
            symbol_color, symbol, COLOR_RESET,
            COL_APP_WIDTH, app_name,
            status_color, COL_STATUS_WIDTH, status, COLOR_RESET,
-           COLOR_WHITE, COL_HASH_WIDTH, hash ? hash : "-", COLOR_RESET,
+           COLOR_WHITE, hash_col, COLOR_RESET,
            COLOR_BRIGHT_BLACK, path ? path : "", COLOR_RESET);
 }
 

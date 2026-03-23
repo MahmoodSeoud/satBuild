@@ -1,9 +1,9 @@
 /*
- * satdeploy APM - Slash commands for satellite binary deployment
+ * satdeploy APM - Slash commands for satellite file deployment
  *
  * Provides commands to interact with satdeploy-agent running on target:
  *   satdeploy status  - Query agent status
- *   satdeploy deploy  - Deploy a binary
+ *   satdeploy deploy  - Deploy a file
  *   satdeploy rollback - Rollback to previous version
  *   satdeploy list    - List available backups
  *   satdeploy logs    - Show service logs
@@ -23,6 +23,7 @@
 #include <apm/csh_api.h>
 #include "deploy.pb-c.h"
 #include "config.h"
+#include "history.h"
 #include "output.h"
 
 #define SATDEPLOY_PORT 20
@@ -245,14 +246,24 @@ static int satdeploy_status_cmd(struct slash *slash)
 
     for (size_t i = 0; i < resp->n_apps; i++) {
         Satdeploy__AppStatusEntry *app = resp->apps[i];
-        const char *status = app->running ? "running" : "stopped";
-        int has_service = 1;  /* Assume all apps have services for now */
+        const char *status = app->running ? "running" : "deployed";
+        int has_service = app->running;
+
+        /* Look up provenance from history.db */
+        satdeploy_deploy_record_t hist_rec;
+        const char *provenance = NULL;
+        if (satdeploy_history_get_last(app->app_name, &hist_rec) == 0 && hist_rec.valid) {
+            if (hist_rec.git_hash[0]) {
+                provenance = hist_rec.git_hash;
+            }
+        }
 
         output_status_row(
             app->app_name,
             status,
-            app->binary_hash,
+            app->file_hash,
             app->remote_path,
+            provenance,
             app->running,
             has_service
         );
@@ -302,10 +313,10 @@ static int satdeploy_deploy_cmd(struct slash *slash)
         reordered[nopt + i] = positional[i];
     int total = nopt + npos;
 
-    optparse_t *parser = optparse_new("satdeploy deploy", "<app_name>");
+    optparse_t *parser = optparse_new("satdeploy push", "<app_name> | -f PATH -r PATH");
     optparse_add_help(parser);
     optparse_add_unsigned(parser, 'n', "node", "NUM", 0, &node, "Target node (default: from config)");
-    optparse_add_string(parser, 'f', "file", "PATH", &local_path, "Local binary path (overrides config)");
+    optparse_add_string(parser, 'f', "file", "PATH", &local_path, "Local file path (overrides config)");
     optparse_add_string(parser, 'r', "remote", "PATH", &remote_path, "Remote installation path");
     optparse_add_set(parser, 'F', "force", 1, &force, "Force deploy even if same version");
 
@@ -315,13 +326,36 @@ static int satdeploy_deploy_cmd(struct slash *slash)
         return SLASH_EINVAL;
     }
 
+    int adhoc_mode = 0;
+    static char derived_name[128];
     if (argi >= total) {
-        printf("Error: app_name required\n");
-        optparse_help(parser, stdout);
-        optparse_del(parser);
-        return SLASH_EUSAGE;
+        /* No app name given — allow ad-hoc mode if both -f and -r are provided */
+        if (local_path && remote_path) {
+            /* Derive app name from remote path basename, strip extension */
+            const char *base = strrchr(remote_path, '/');
+            base = base ? base + 1 : remote_path;
+            strncpy(derived_name, base, sizeof(derived_name) - 1);
+            derived_name[sizeof(derived_name) - 1] = '\0';
+            /* Strip final extension */
+            char *dot = strrchr(derived_name, '.');
+            if (dot && dot != derived_name) {
+                *dot = '\0';
+            }
+            /* Replace remaining dots with dashes */
+            for (char *p = derived_name; *p; p++) {
+                if (*p == '.') *p = '-';
+            }
+            app_name = derived_name;
+            adhoc_mode = 1;
+        } else {
+            printf("Error: app_name required (or use -f and -r for ad-hoc push)\n");
+            optparse_help(parser, stdout);
+            optparse_del(parser);
+            return SLASH_EUSAGE;
+        }
+    } else {
+        app_name = (char *)reordered[argi];
     }
-    app_name = (char *)reordered[argi];
     optparse_del(parser);
 
     /* Load config for defaults */
@@ -348,6 +382,16 @@ static int satdeploy_deploy_cmd(struct slash *slash)
         }
         if (!remote_path && app_config->remote_path[0]) {
             remote_path = app_config->remote_path;
+        }
+    }
+
+    /* Expand tilde in local_path */
+    static char expanded_path[MAX_PATH_LEN];
+    if (local_path && local_path[0] == '~' && (local_path[1] == '/' || local_path[1] == '\0')) {
+        const char *home = getenv("HOME");
+        if (home) {
+            snprintf(expanded_path, sizeof(expanded_path), "%s%s", home, local_path + 1);
+            local_path = expanded_path;
         }
     }
 
@@ -387,8 +431,8 @@ static int satdeploy_deploy_cmd(struct slash *slash)
         if (send_deploy_request(node, &status_req, &status_resp) == 0 && status_resp->success) {
             for (size_t i = 0; i < status_resp->n_apps; i++) {
                 if (strcmp(status_resp->apps[i]->app_name, app_name) == 0) {
-                    if (status_resp->apps[i]->binary_hash &&
-                        strcmp(status_resp->apps[i]->binary_hash, checksum) == 0) {
+                    if (status_resp->apps[i]->file_hash &&
+                        strcmp(status_resp->apps[i]->file_hash, checksum) == 0) {
                         printf("Already deployed: %s (%s)\n", app_name, checksum);
                         satdeploy__deploy_response__free_unpacked(status_resp, NULL);
                         return SLASH_SUCCESS;
@@ -405,6 +449,10 @@ static int satdeploy_deploy_cmd(struct slash *slash)
     uint32_t total_chunks = (file_size + CHUNK_SIZE - 1) / CHUNK_SIZE;
     if (total_chunks == 0) total_chunks = 1;
 
+    if (adhoc_mode) {
+        printf("  Ad-hoc mode: no service restart, no dependency ordering.\n");
+        printf("  To configure as a managed app, add it to config.yaml.\n\n");
+    }
     printf("Deploying %s:\n", app_name);
     printf("  Local:    %s\n", local_path);
     printf("  Remote:   %s\n", remote_path);
@@ -594,11 +642,17 @@ static int satdeploy_rollback_cmd(struct slash *slash)
         char restored_hash[16] = {0};
         size_t len = strlen(filename);
         if (len > 4 && strcmp(filename + len - 4, ".bak") == 0) {
-            /* Copy hash (everything before .bak, max 8 chars) */
-            size_t hash_len = len - 4;
-            if (hash_len > 8) hash_len = 8;
-            strncpy(restored_hash, filename, hash_len);
-            restored_hash[hash_len] = '\0';
+            /* Backup format: YYYYMMDD-HHMMSS-{hash8}.bak
+             * Extract hash from after the last '-' */
+            const char *last_dash = strrchr(filename, '-');
+            if (last_dash) {
+                last_dash++;  /* skip the '-' */
+                size_t hash_len = (filename + len - 4) - last_dash;
+                if (hash_len > 0 && hash_len <= 8) {
+                    strncpy(restored_hash, last_dash, hash_len);
+                    restored_hash[hash_len] = '\0';
+                }
+            }
         }
 
         if (restored_hash[0]) {
@@ -931,7 +985,7 @@ static int satdeploy_init_cmd(struct slash *slash)
 static int satdeploy_help_cmd(struct slash *slash)
 {
     (void)slash;
-    printf("  Deploy binaries to embedded Linux targets.\n\n");
+    printf("  Deploy files to embedded Linux targets.\n\n");
     printf("Commands:\n");
     printf("  config    Show current configuration.\n");
     printf("  init      Interactive setup, creates config.yaml.\n");
@@ -943,7 +997,7 @@ static int satdeploy_help_cmd(struct slash *slash)
     return SLASH_SUCCESS;
 }
 
-slash_command_group(satdeploy, "Satellite binary deployment");
+slash_command_group(satdeploy, "Satellite file deployment");
 slash_command_sub(satdeploy, help, satdeploy_help_cmd, NULL, "Show this help message");
 slash_command_sub(satdeploy, init, satdeploy_init_cmd, "", "Interactive setup, creates config.yaml.");
 slash_command_sub(satdeploy, config, satdeploy_config_cmd, "", "Show current configuration.");

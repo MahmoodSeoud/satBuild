@@ -21,6 +21,7 @@ param_dep = dependency('param', fallback: ['param', 'param_dep']).as_link_whole(
 proto_c_dep = dependency('libprotobuf-c', fallback: ['protobuf-c', 'proto_c_dep'])
 yaml_dep = dependency('yaml-0.1', required: true)
 openssl_dep = dependency('openssl', required: true)
+sqlite3_dep = dependency('sqlite3', required: true)
 
 satdeploy_apm = shared_library(
     'csh_satdeploy_apm',
@@ -29,8 +30,9 @@ satdeploy_apm = shared_library(
       'src/deploy.pb-c.c',
       'src/config.c',
       'src/output.c',
+      'src/history.c',
     ],
     include_directories: includes,
-    dependencies: [apm_csh_dep, slash_dep, param_dep, csp_dep, proto_c_dep, yaml_dep, openssl_dep],
+    dependencies: [apm_csh_dep, slash_dep, param_dep, csp_dep, proto_c_dep, yaml_dep, openssl_dep, sqlite3_dep],
     install: true
 )
