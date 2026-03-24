@@ -113,7 +113,7 @@ For targets connected via CAN bus or serial (no network):
 
     For other toolchains, point meson at your own cross-compilation file and build normally.
 
-2. Get the agent binary onto your target. This is the bootstrapping step — satdeploy handles all future OTA deploys, but the first install of the agent itself requires physical access (USB, JTAG, or flashing the Yocto image).
+2. Get the agent binary onto your target.
 
 3. Start the agent on the target with the right interface flag:
 
