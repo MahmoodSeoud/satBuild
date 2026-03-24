@@ -57,6 +57,8 @@ FROM debian:bookworm-slim
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libzmq5 \
     libprotobuf-c1 \
+    libsocketcan2 \
+    libyaml-0-2 \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy binaries from builder
