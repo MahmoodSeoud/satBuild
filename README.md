@@ -1,82 +1,31 @@
 # satdeploy
 
-Deploy files to embedded Linux targets with versioned backups, dependency-aware service restarts, and one-command rollback.
+OTA deployment for embedded Linux satellites. Push files over SSH or CSP, track versions, rollback with one command.
 
-## Try it in 60 seconds
+Deploying software to satellite hardware during development means USB drives, ad-hoc scripts, or hoping SSH works. No versioning, no rollback, no way to know what's running. satdeploy fixes this — works over SSH for networked targets and CSP (CubeSat Space Protocol) over CAN bus for air-gapped ones.
 
-No hardware needed. satdeploy ships with a simulated satellite target via Docker:
+## Try it now
+
+Requires [Docker Desktop](https://www.docker.com/products/docker-desktop/) (free for personal and education use).
 
 ```bash
-git clone https://github.com/MahmoodSeoud/satBuild.git
-cd satBuild
-python -m venv .venv && source .venv/bin/activate
-pip install -e .
-
-satdeploy demo start
+pipx install satdeploy         # or: pip install satdeploy
+satdeploy demo start            # starts a simulated satellite via Docker
 ```
 
-This starts a simulated satellite with Docker, configures a test app, and prints a quick-start guide. Then:
+This starts a simulated satellite, configures a test app, and prints a quick-start guide. Then:
 
 ```bash
-satdeploy status              # See what's deployed
-satdeploy push test_app       # Deploy a file
-satdeploy list test_app       # See version history
-satdeploy rollback test_app   # Roll back
-satdeploy logs test_app       # View service logs
-satdeploy demo shell          # Shell into the satellite
-satdeploy demo stop           # Clean up
+satdeploy status                # See what's deployed
+satdeploy push test_app         # Deploy a new version
+satdeploy list test_app         # See version history
+satdeploy rollback test_app     # Roll back to previous
+satdeploy logs test_app         # View service logs
+satdeploy demo shell            # Shell into the satellite
+satdeploy demo stop             # Clean up
 ```
 
 Docker is only used for the demo simulator. Real deployments use SSH or CSP directly.
-
-## Why
-
-Deploying files to embedded targets during development is tedious. You're either using a janky uploader, a USB stick, or SSH + prayer. No versioning, no rollback, no dependency awareness.
-
-satdeploy fixes this with:
-- **Versioned backups** - Every deploy saves the previous file with its content hash
-- **Git provenance** - Every deploy records the git commit that built the file
-- **Dependency ordering** - Services stop/start in the right order
-- **One-command rollback** - Instantly restore any previous version
-- **Multi-transport** - Works over SSH or CSP (satellite links)
-- **Per-target configs** - Separate config dirs per target, switch with `--config`
-
-## Components
-
-| Component | What it does |
-|-----------|--------------|
-| `satdeploy` (Python) | Ground station CLI |
-| `satdeploy-agent` (C) | Runs on target, handles CSP deploys |
-| `satdeploy-apm` (C) | csh slash commands for ground station |
-
-## Installation
-
-```bash
-git clone https://github.com/MahmoodSeoud/satBuild.git
-cd satBuild
-python -m venv .venv && source .venv/bin/activate
-pip install -e .
-```
-
-## Commands
-
-| Command | Description |
-|---------|-------------|
-| `satdeploy push <app>` | Deploy file |
-| `satdeploy push --all` | Deploy all apps |
-| `satdeploy push --require-clean` | Refuse to deploy from dirty git tree |
-| `satdeploy status` | Show app statuses with git provenance |
-| `satdeploy list <app>` | List all versions |
-| `satdeploy rollback <app>` | Restore previous version |
-| `satdeploy rollback <app> <hash>` | Restore specific version |
-| `satdeploy logs <app>` | Show service logs |
-| `satdeploy config` | Show configuration |
-| `satdeploy demo start` | Start simulated satellite (Docker) |
-| `satdeploy demo stop` | Stop simulator |
-| `satdeploy demo shell` | Shell into the satellite (streams agent logs) |
-| `satdeploy demo eject` | Generate config for real hardware |
-
-All commands accept `--config` to select which target config to use (e.g. `--config ~/.satdeploy/som2/config.yaml`).
 
 ## Example Session
 
@@ -112,6 +61,76 @@ $ satdeploy rollback controller
 [3/3] Starting controller.service
 > Rolled back controller to a3f2c9b8
 ```
+
+## Deploy to Real Hardware
+
+After trying the demo, transition to your actual target:
+
+### SSH (networked targets)
+
+If your target has network access:
+
+```bash
+satdeploy demo eject              # generates ~/.satdeploy/config.yaml (select "ssh")
+vim ~/.satdeploy/config.yaml      # set host, user, app paths
+satdeploy status                  # verify connection
+satdeploy push my-app             # deploy
+```
+
+### CSP (air-gapped targets, CAN bus)
+
+For targets connected via CAN bus or serial (no network):
+
+1. Build `satdeploy-agent` for your target (requires a Yocto/Poky cross-compile toolchain — if you're building satellite images, you already have this):
+
+    ```bash
+    source /opt/poky/environment-setup-armv8a-poky-linux
+    cd satdeploy-agent
+    meson setup build-arm --cross-file yocto_cross.ini
+    ninja -C build-arm
+    ```
+
+2. Get the agent binary onto your target. This is the bootstrapping step — satdeploy handles all future OTA deploys, but the first install of the agent itself requires physical access (USB, JTAG, or flashing the Yocto image).
+
+3. Start the agent on the target.
+
+4. Configure the ground station:
+
+    ```bash
+    satdeploy demo eject              # generates config (select "csp")
+    vim ~/.satdeploy/config.yaml      # set agent_node, ground_node, zmq ports
+    satdeploy status                  # verify connection
+    ```
+
+## Features
+
+- **Versioned backups** - Every deploy saves the previous file with its content hash
+- **Git provenance** - Every deploy records the git commit that built the file
+- **Dependency ordering** - Services stop/start in the right order
+- **One-command rollback** - Instantly restore any previous version
+- **Multi-transport** - Works over SSH or CSP (satellite links)
+- **Per-target configs** - Separate config dirs per target, switch with `--config`
+
+## Commands
+
+| Command | Description |
+|---------|-------------|
+| `satdeploy push <app>` | Deploy file |
+| `satdeploy push <app> --local ./path` | Deploy with path override |
+| `satdeploy push --all` | Deploy all apps |
+| `satdeploy push --require-clean` | Refuse to deploy from dirty git tree |
+| `satdeploy status` | Show app statuses with git provenance |
+| `satdeploy list <app>` | List all versions |
+| `satdeploy rollback <app>` | Restore previous version |
+| `satdeploy rollback <app> <hash>` | Restore specific version |
+| `satdeploy logs <app>` | Show service logs |
+| `satdeploy config` | Show configuration |
+| `satdeploy demo start` | Start simulated satellite (Docker) |
+| `satdeploy demo stop` | Stop simulator |
+| `satdeploy demo shell` | Shell into the satellite (streams agent logs) |
+| `satdeploy demo eject` | Generate config for real hardware |
+
+All commands accept `--config` to select which target config to use (e.g. `--config ~/.satdeploy/som2/config.yaml`).
 
 ## Configuration
 
@@ -158,11 +177,9 @@ apps:
 | `restart` | Services to restart when this library changes |
 | `param` | libparam name for CSP start/stop |
 
-## Transports
+### Transports
 
-### SSH
-
-Direct SSH/SFTP connection. Works with any Linux target.
+**SSH** — Direct SSH/SFTP connection. Works with any Linux target.
 
 ```yaml
 name: flatsat
@@ -171,9 +188,7 @@ host: 192.168.1.50
 user: root
 ```
 
-### CSP (Cubesat Space Protocol)
-
-For satellite communication links. Requires `satdeploy-agent` running on target.
+**CSP** — CubeSat Space Protocol over ZMQ, CAN, or KISS serial. Requires `satdeploy-agent` on target.
 
 ```yaml
 name: satellite
@@ -183,7 +198,7 @@ agent_node: 5425
 ground_node: 40
 ```
 
-## Dependency Resolution
+### Dependency Resolution
 
 When deploying an app with dependencies:
 
@@ -191,29 +206,31 @@ When deploying an app with dependencies:
 2. **Deploy** the file
 3. **Start** services bottom-up (dependencies first)
 
-Example: `controller` depends on `csp_server`:
-```
-Stop:  controller -> csp_server
-Start: csp_server -> controller
-```
-
 For libraries with a `restart` list, those services are restarted directly.
 
-## From Demo to Real Hardware
+## Install from Source
 
-After trying the demo, transition to your actual target:
+For contributors or development:
 
 ```bash
-satdeploy demo eject
+git clone https://github.com/MahmoodSeoud/satBuild.git
+cd satBuild
+python -m venv .venv && source .venv/bin/activate
+pip install -e ".[dev]"
+python -m pytest
 ```
 
-For SSH targets, you just need network access and an SSH key. For CSP targets, you need:
-1. `satdeploy-agent` running on the target (see below)
-2. A CSP link (zmqproxy, CAN, or KISS serial)
+## Components
 
-## Building the Agent
+| Component | Language | Purpose |
+|-----------|----------|---------|
+| `satdeploy` | Python | Ground station CLI |
+| `satdeploy-agent` | C | Runs on ARM target, handles CSP deploy commands |
+| `satdeploy-apm` | C | CSH slash commands for ground station |
 
-The `satdeploy-agent` runs on ARM targets. Cross-compile with:
+### Building satdeploy-agent
+
+The agent runs on ARM targets. Cross-compile with Yocto:
 
 ```bash
 source /opt/poky/environment-setup-armv8a-poky-linux
@@ -222,11 +239,9 @@ meson setup build-arm --cross-file yocto_cross.ini
 ninja -C build-arm
 ```
 
-Deploy `build-arm/satdeploy-agent` to the target.
+### Building satdeploy-apm
 
-## Building satdeploy-apm
-
-Ground station csh module:
+Ground station CSH module:
 
 ```bash
 cd satdeploy-apm
@@ -235,11 +250,9 @@ ninja -C build
 cp build/libcsh_satdeploy_apm.so ~/.local/lib/csh/
 ```
 
-Then in csh: `satdeploy help`
-
 ## Requirements
 
-- Python 3.12+
+- Python 3.8+
 - Docker (for demo mode only)
 - SSH access to target (for SSH transport)
 - `satdeploy-agent` on target (for CSP transport)
