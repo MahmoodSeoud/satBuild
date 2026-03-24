@@ -81,7 +81,7 @@ satdeploy push my-app             # deploy
 
 For targets connected via CAN bus or serial (no network):
 
-1. Build `satdeploy-agent` for your target (requires a Yocto/Poky cross-compile toolchain — if you're building satellite images, you already have this):
+1. Build `satdeploy-agent` for your target (requires a Yocto/Poky cross-compile toolchain):
 
     ```bash
     source /opt/poky/environment-setup-armv8a-poky-linux
