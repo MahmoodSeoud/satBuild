@@ -457,6 +457,202 @@ class TestDTPTransfer:
         )
 
 
+# ─── CLI push with provenance sources ────────────────────────────
+
+
+class TestCLIPushProvenanceSources:
+    """Test `satdeploy push` end-to-end via the CLI with all three
+    provenance sources: local git, GitHub Actions CI, and non-git file.
+
+    These run the real CLI against the live demo agent, verifying that
+    provenance tags propagate through the full stack.
+    """
+
+    @staticmethod
+    def _fresh_transport():
+        t = CSPTransport(
+            zmq_endpoint=f"tcp://{ZMQ_HOST}:{ZMQ_PUB_PORT}",
+            agent_node=AGENT_NODE,
+            ground_node=GROUND_NODE,
+            backup_dir=BACKUP_DIR,
+            timeout_ms=10000,
+            zmq_pub_port=ZMQ_PUB_PORT,
+            zmq_sub_port=ZMQ_SUB_PORT,
+        )
+        t.connect()
+        return t
+
+    def test_push_from_git_repo(self):
+        """Push a file tracked in the git repo — should tag with branch@hash."""
+        from click.testing import CliRunner
+        from satdeploy.cli import main
+
+        runner = CliRunner()
+
+        # Use a file inside this git repo (the demo binary is generated from
+        # repo content, so use it directly)
+        demo_binary = os.path.expanduser("~/.satdeploy-demo/binaries/test_app")
+        if not os.path.exists(demo_binary):
+            demo_binary = os.path.expanduser("~/.satdeploy/demo/binaries/test_app")
+        if not os.path.exists(demo_binary):
+            pytest.skip("Demo binary not found")
+
+        # Use a file from WITHIN the git repo for local provenance
+        # The pyproject.toml is tracked in git and always exists
+        result = runner.invoke(
+            main,
+            ["push", "test_app", "--local", "pyproject.toml",
+             "--config", os.path.expanduser("~/.satdeploy-demo/config.yaml")],
+        )
+
+        assert result.exit_code == 0, f"Push failed: {result.output}"
+        assert "Deployed" in result.output
+
+        # Should have local git provenance (branch@hash format)
+        # The provenance appears in the Deployed line
+        output = result.output
+        assert "@" in output, (
+            f"Expected git provenance (branch@hash) in output: {output}"
+        )
+
+    def test_push_from_github_actions(self):
+        """Push with GitHub Actions env vars — should tag with CI provenance."""
+        from click.testing import CliRunner
+        from satdeploy.cli import main
+
+        runner = CliRunner()
+
+        # Brief pause to let agent settle after prior deploys
+        time.sleep(0.5)
+
+        # Create a temp file outside any git repo
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".bin", dir="/tmp") as f:
+            f.write(b"github actions payload " + str(time.time()).encode())
+            f.flush()
+            tmp_path = f.name
+
+        try:
+            # Set GitHub Actions environment variables
+            env = os.environ.copy()
+            env["GITHUB_SHA"] = "abc123def456789012345678901234567890abcd"
+            env["GITHUB_REF_NAME"] = "main"
+            env["GITHUB_RUN_ID"] = "99999"
+
+            result = runner.invoke(
+                main,
+                ["push", "test_app", "--local", tmp_path,
+                 "--config", os.path.expanduser("~/.satdeploy-demo/config.yaml")],
+                env=env,
+            )
+
+            assert result.exit_code == 0, f"Push failed: {result.output}"
+            assert "Deployed" in result.output
+            assert "ci:github" in result.output, (
+                f"Expected CI provenance tag in output: {result.output}"
+            )
+        finally:
+            os.unlink(tmp_path)
+
+    def test_push_non_git_file(self):
+        """Push a file from outside any git repo — should deploy with no provenance."""
+        from click.testing import CliRunner
+        from satdeploy.cli import main
+
+        runner = CliRunner()
+
+        # Create file in /tmp (outside any git repo), with no CI env vars
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".bin", dir="/tmp") as f:
+            f.write(b"non-git payload " + str(time.time()).encode())
+            f.flush()
+            tmp_path = f.name
+
+        try:
+            # Clear any CI env vars that might be set
+            env = os.environ.copy()
+            env.pop("GITHUB_SHA", None)
+            env.pop("GITHUB_REF_NAME", None)
+            env.pop("GITHUB_RUN_ID", None)
+
+            result = runner.invoke(
+                main,
+                ["push", "test_app", "--local", tmp_path,
+                 "--config", os.path.expanduser("~/.satdeploy-demo/config.yaml")],
+                env=env,
+            )
+
+            assert result.exit_code == 0, f"Push failed: {result.output}"
+            assert "Deployed" in result.output
+            # No provenance tag — just the hash
+            assert "ci:github" not in result.output
+        finally:
+            os.unlink(tmp_path)
+
+    def test_push_sources_produce_different_status(self):
+        """Each push source should result in correct status hash on the agent."""
+        from click.testing import CliRunner
+        from satdeploy.cli import main
+
+        runner = CliRunner()
+        config_flag = ["--config", os.path.expanduser("~/.satdeploy-demo/config.yaml")]
+
+        # 1. Push non-git file
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".bin", dir="/tmp") as f:
+            f.write(b"source-test-nongit")
+            f.flush()
+            tmp1 = f.name
+
+        env_clean = os.environ.copy()
+        env_clean.pop("GITHUB_SHA", None)
+        env_clean.pop("GITHUB_REF_NAME", None)
+        env_clean.pop("GITHUB_RUN_ID", None)
+
+        try:
+            result = runner.invoke(
+                main, ["push", "test_app", "--local", tmp1] + config_flag,
+                env=env_clean,
+            )
+            assert result.exit_code == 0
+
+            # Check status via transport
+            t = self._fresh_transport()
+            status1 = t.get_status()
+            t.disconnect()
+            hash_nongit = status1["test_app"].file_hash
+        finally:
+            os.unlink(tmp1)
+
+        # 2. Push with CI provenance
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".bin", dir="/tmp") as f:
+            f.write(b"source-test-ci")
+            f.flush()
+            tmp2 = f.name
+
+        env_ci = os.environ.copy()
+        env_ci["GITHUB_SHA"] = "deadbeef12345678901234567890123456789012"
+        env_ci["GITHUB_REF_NAME"] = "release/v2"
+        env_ci["GITHUB_RUN_ID"] = "42"
+
+        try:
+            result = runner.invoke(
+                main, ["push", "test_app", "--local", tmp2] + config_flag,
+                env=env_ci,
+            )
+            assert result.exit_code == 0
+
+            t = self._fresh_transport()
+            status2 = t.get_status()
+            t.disconnect()
+            hash_ci = status2["test_app"].file_hash
+        finally:
+            os.unlink(tmp2)
+
+        # Different files → different hashes
+        assert hash_nongit != hash_ci, (
+            f"Non-git and CI pushes should produce different hashes: "
+            f"{hash_nongit} vs {hash_ci}"
+        )
+
+
 # ─── Error handling ───────────────────────────────────────────────
 
 
