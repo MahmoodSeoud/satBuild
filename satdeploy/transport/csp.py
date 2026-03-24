@@ -381,6 +381,7 @@ class CSPTransport(Transport):
                 backup_path=response.backup_path if response.backup_path else None,
                 error_code=response.error_code if not response.success else None,
                 error_message=response.error_message if not response.success else None,
+                file_hash=checksum[:8] if response.success else None,
             )
 
         finally:

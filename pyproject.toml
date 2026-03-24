@@ -36,3 +36,6 @@ exclude = ["tests*", "satdeploy-agent*", "satdeploy-apm*"]
 testpaths = ["tests"]
 python_files = ["test_*.py"]
 python_functions = ["test_*"]
+markers = [
+    "integration: tests requiring running demo environment (Docker + zmqproxy + agent)",
+]
