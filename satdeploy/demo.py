@@ -553,7 +553,7 @@ def demo_shell() -> None:
     try:
         subprocess.run(
             ["docker", "compose", "-f", str(compose_file),
-             "exec", "agent", "/bin/sh"],
+             "exec", "agent", "/bin/bash"],
         )
     except KeyboardInterrupt:
         click.echo("\nShell closed.")

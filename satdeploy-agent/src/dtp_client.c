@@ -54,6 +54,12 @@ static bool on_download_data(dtp_t *session, csp_packet_t *packet) {
         return true;  /* Continue, empty packet */
     }
 
+    /* Guard against integer underflow in dtp_get_data_info():
+       packet must have at least 2 × uint32_t (8 bytes) for the header */
+    if (packet->length < 2 * sizeof(uint32_t)) {
+        return true;  /* Skip malformed packet, continue transfer */
+    }
+
     /* Use DTP helper to extract data info */
     dtp_on_data_info_t info = dtp_get_data_info(session, packet);
 
