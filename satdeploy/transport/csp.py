@@ -81,6 +81,9 @@ class CSPTransport(Transport):
         timeout_ms: int = 30000,
         zmq_pub_port: int = ZMQ_PROXY_SUB_PORT,
         zmq_sub_port: int = ZMQ_PROXY_PUB_PORT,
+        dtp_mtu: int = 1024,
+        dtp_throughput: int = 10000000,
+        dtp_timeout: int = 60,
     ):
         """Initialize CSP transport.
 
@@ -94,6 +97,9 @@ class CSPTransport(Transport):
             timeout_ms: Timeout for CSP operations in milliseconds.
             zmq_pub_port: zmqproxy subscribe port (TX). Default 6000.
             zmq_sub_port: zmqproxy publish port (RX). Default 7000.
+            dtp_mtu: DTP max transmission unit in bytes.
+            dtp_throughput: DTP target throughput in bytes/s.
+            dtp_timeout: DTP transfer timeout in seconds.
         """
         self.zmq_endpoint = zmq_endpoint
         self.zmq_host = _parse_zmq_host(zmq_endpoint)
@@ -104,6 +110,9 @@ class CSPTransport(Transport):
         self.timeout_ms = timeout_ms
         self.zmq_pub_port = zmq_pub_port
         self.zmq_sub_port = zmq_sub_port
+        self.dtp_mtu = dtp_mtu
+        self.dtp_throughput = dtp_throughput
+        self.dtp_timeout = dtp_timeout
 
         self._context: Optional[zmq.Context] = None
         self._pub: Optional[zmq.Socket] = None  # TX: send CSP packets
@@ -345,6 +354,7 @@ class CSPTransport(Transport):
             payload_id=payload_id,
             zmq_endpoint=self.zmq_endpoint,
             node_address=self.ground_node,
+            mtu=self.dtp_mtu,
             zmq_pub_port=self.zmq_pub_port,
             zmq_sub_port=self.zmq_sub_port,
             on_progress=on_progress,
@@ -362,6 +372,9 @@ class CSPTransport(Transport):
             request.payload_id = payload_id
             request.dtp_server_node = self.ground_node
             request.dtp_server_port = self.dtp_port
+            request.dtp_mtu = self.dtp_mtu
+            request.dtp_throughput = self.dtp_throughput
+            request.dtp_timeout = self.dtp_timeout
 
             import stat
             file_stat = os.stat(local_path)

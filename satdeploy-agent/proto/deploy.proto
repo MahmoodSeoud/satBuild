@@ -54,6 +54,11 @@ message DeployRequest {
 
     // Source file permission mode (e.g., 0755, 0644). 0 = use default (0755).
     uint32 file_mode = 17;
+
+    // DTP transfer tuning (0 = use agent defaults)
+    uint32 dtp_mtu = 18;          // Max transmission unit in bytes (default: 1024)
+    uint32 dtp_throughput = 19;   // Target throughput in bytes/s (default: 10000000)
+    uint32 dtp_timeout = 20;      // Transfer timeout in seconds (default: 60)
 }
 
 // Backup information returned by CMD_LIST_VERSIONS

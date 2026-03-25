@@ -55,6 +55,9 @@ def get_transport(
             backup_dir=backup_dir,
             zmq_pub_port=module.zmq_pub_port,
             zmq_sub_port=module.zmq_sub_port,
+            dtp_mtu=module.dtp_mtu,
+            dtp_throughput=module.dtp_throughput,
+            dtp_timeout=module.dtp_timeout,
         )
     else:
         raise ValueError(f"Unknown transport type: {module.transport}")

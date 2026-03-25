@@ -31,6 +31,11 @@ class ModuleConfig:
     zmq_pub_port: int = 9600  # zmqproxy subscribe port (TX)
     zmq_sub_port: int = 9601  # zmqproxy publish port (RX)
 
+    # DTP transfer tuning
+    dtp_mtu: int = 1024        # Max transmission unit (bytes)
+    dtp_throughput: int = 10000000  # Target throughput (bytes/s)
+    dtp_timeout: int = 60      # Transfer timeout (seconds)
+
     # Common fields
     csp_addr: int = 0
     netmask: int = 0

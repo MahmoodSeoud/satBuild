@@ -19,7 +19,7 @@
 /* DTP configuration defaults */
 #define DTP_DEFAULT_TIMEOUT_S    60
 #define DTP_DEFAULT_MTU          1024
-#define DTP_DEFAULT_THROUGHPUT   0  /* 0 = unlimited */
+#define DTP_DEFAULT_THROUGHPUT   10000000  /* bytes/s — must be non-zero to avoid div-by-zero in compute_dtp_metrics */
 
 /* Context for file download */
 typedef struct {
@@ -99,11 +99,16 @@ static void on_download_release(dtp_t *session) {
 }
 
 int dtp_download_file(uint32_t server_node, uint16_t payload_id,
-                      const char *dest_path, uint32_t expected_size) {
+                      const char *dest_path, uint32_t expected_size,
+                      uint32_t mtu, uint32_t throughput, uint32_t timeout) {
     if (dest_path == NULL) {
         return -1;
     }
 
+    /* Apply defaults for zero values */
+    if (mtu == 0)        mtu = DTP_DEFAULT_MTU;
+    if (throughput == 0) throughput = DTP_DEFAULT_THROUGHPUT;
+    if (timeout == 0)    timeout = DTP_DEFAULT_TIMEOUT_S;
 
     /* Open destination file */
     FILE *fp = fopen(dest_path, "wb");
@@ -130,11 +135,11 @@ int dtp_download_file(uint32_t server_node, uint16_t payload_id,
     dtp_t *session = dtp_prepare_session(
         server_node,
         session_id,
-        DTP_DEFAULT_THROUGHPUT,
-        DTP_DEFAULT_TIMEOUT_S,
+        throughput,
+        timeout,
         payload_id,
         NULL,              /* ctx - set below */
-        DTP_DEFAULT_MTU,
+        mtu,
         false,             /* resume */
         0                  /* keep_alive_interval */
     );

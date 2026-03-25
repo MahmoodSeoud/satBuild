@@ -187,7 +187,7 @@ void   satdeploy__deploy_response__free_unpacked
   assert(message->base.descriptor == &satdeploy__deploy_response__descriptor);
   protobuf_c_message_free_unpacked ((ProtobufCMessage*)message, allocator);
 }
-static const ProtobufCFieldDescriptor satdeploy__deploy_request__field_descriptors[17] =
+static const ProtobufCFieldDescriptor satdeploy__deploy_request__field_descriptors[20] =
 {
   {
     "command",
@@ -393,6 +393,42 @@ static const ProtobufCFieldDescriptor satdeploy__deploy_request__field_descripto
     0,             /* flags */
     0,NULL,NULL    /* reserved1,reserved2, etc */
   },
+  {
+    "dtp_mtu",
+    18,
+    PROTOBUF_C_LABEL_NONE,
+    PROTOBUF_C_TYPE_UINT32,
+    0,   /* quantifier_offset */
+    offsetof(Satdeploy__DeployRequest, dtp_mtu),
+    NULL,
+    NULL,
+    0,             /* flags */
+    0,NULL,NULL    /* reserved1,reserved2, etc */
+  },
+  {
+    "dtp_throughput",
+    19,
+    PROTOBUF_C_LABEL_NONE,
+    PROTOBUF_C_TYPE_UINT32,
+    0,   /* quantifier_offset */
+    offsetof(Satdeploy__DeployRequest, dtp_throughput),
+    NULL,
+    NULL,
+    0,             /* flags */
+    0,NULL,NULL    /* reserved1,reserved2, etc */
+  },
+  {
+    "dtp_timeout",
+    20,
+    PROTOBUF_C_LABEL_NONE,
+    PROTOBUF_C_TYPE_UINT32,
+    0,   /* quantifier_offset */
+    offsetof(Satdeploy__DeployRequest, dtp_timeout),
+    NULL,
+    NULL,
+    0,             /* flags */
+    0,NULL,NULL    /* reserved1,reserved2, etc */
+  },
 };
 static const unsigned satdeploy__deploy_request__field_indices_by_name[] = {
   1,   /* field[1] = app_name */
@@ -400,8 +436,11 @@ static const unsigned satdeploy__deploy_request__field_indices_by_name[] = {
   14,   /* field[14] = chunk_data */
   12,   /* field[12] = chunk_seq */
   0,   /* field[0] = command */
+  17,   /* field[17] = dtp_mtu */
   6,   /* field[6] = dtp_server_node */
   7,   /* field[7] = dtp_server_port */
+  18,   /* field[18] = dtp_throughput */
+  19,   /* field[19] = dtp_timeout */
   10,   /* field[10] = expected_checksum */
   9,   /* field[9] = expected_size */
   16,   /* field[16] = file_mode */
@@ -416,7 +455,7 @@ static const unsigned satdeploy__deploy_request__field_indices_by_name[] = {
 static const ProtobufCIntRange satdeploy__deploy_request__number_ranges[1 + 1] =
 {
   { 1, 0 },
-  { 0, 17 }
+  { 0, 20 }
 };
 const ProtobufCMessageDescriptor satdeploy__deploy_request__descriptor =
 {
@@ -426,7 +465,7 @@ const ProtobufCMessageDescriptor satdeploy__deploy_request__descriptor =
   "Satdeploy__DeployRequest",
   "satdeploy",
   sizeof(Satdeploy__DeployRequest),
-  17,
+  20,
   satdeploy__deploy_request__field_descriptors,
   satdeploy__deploy_request__field_indices_by_name,
   1,  satdeploy__deploy_request__number_ranges,

@@ -176,10 +176,25 @@ struct  Satdeploy__DeployRequest
    * Source file permission mode (e.g., 0755, 0644). 0 = use default (0755).
    */
   uint32_t file_mode;
+  /*
+   * DTP transfer tuning (0 = use agent defaults)
+   */
+  /*
+   * Max transmission unit in bytes (default: 1024)
+   */
+  uint32_t dtp_mtu;
+  /*
+   * Target throughput in bytes/s (default: 10000000)
+   */
+  uint32_t dtp_throughput;
+  /*
+   * Transfer timeout in seconds (default: 60)
+   */
+  uint32_t dtp_timeout;
 };
 #define SATDEPLOY__DEPLOY_REQUEST__INIT \
  { PROTOBUF_C_MESSAGE_INIT (&satdeploy__deploy_request__descriptor) \
-, SATDEPLOY__DEPLOY_COMMAND__CMD_UNKNOWN, (char *)protobuf_c_empty_string, (char *)protobuf_c_empty_string, 0, 0, (char *)protobuf_c_empty_string, 0, 0, 0, 0, (char *)protobuf_c_empty_string, (char *)protobuf_c_empty_string, 0, 0, {0,NULL}, 0, 0 }
+, SATDEPLOY__DEPLOY_COMMAND__CMD_UNKNOWN, (char *)protobuf_c_empty_string, (char *)protobuf_c_empty_string, 0, 0, (char *)protobuf_c_empty_string, 0, 0, 0, 0, (char *)protobuf_c_empty_string, (char *)protobuf_c_empty_string, 0, 0, {0,NULL}, 0, 0, 0, 0, 0 }
 
 
 /*

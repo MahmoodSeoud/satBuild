@@ -705,7 +705,9 @@ static void handle_deploy(const Satdeploy__DeployRequest *req,
     snprintf(temp_path, sizeof(temp_path), "%s.tmp", req->remote_path);
 
     if (dtp_download_file(req->dtp_server_node, req->payload_id,
-                          temp_path, req->expected_size) != 0) {
+                          temp_path, req->expected_size,
+                          req->dtp_mtu, req->dtp_throughput,
+                          req->dtp_timeout) != 0) {
         resp->success = 0;
         resp->error_code = SATDEPLOY__DEPLOY_ERROR__ERR_DTP_DOWNLOAD_FAILED;
         resp->error_message = "DTP download failed";
