@@ -21,6 +21,7 @@ param_dep = dependency('param', fallback: ['param', 'param_dep']).as_link_whole(
 proto_c_dep = dependency('libprotobuf-c', fallback: ['protobuf-c', 'libprotobuf_c_dep'])
 yaml_dep = dependency('yaml-0.1', fallback: ['libyaml', 'yaml_dep'], required: true)
 sqlite3_dep = dependency('sqlite3', fallback: ['sqlite3', 'sqlite3_dep'], required: true)
+dtp_dep = dependency('dtp', fallback: ['dtp', 'dtp_server_lib_dep'], required: true)
 
 satdeploy_apm = shared_library(
     'csh_satdeploy_apm',
@@ -33,6 +34,6 @@ satdeploy_apm = shared_library(
       'src/history.c',
     ],
     include_directories: includes,
-    dependencies: [apm_csh_dep, slash_dep, param_dep, csp_dep, proto_c_dep, yaml_dep, sqlite3_dep],
+    dependencies: [apm_csh_dep, slash_dep, param_dep, csp_dep, proto_c_dep, yaml_dep, sqlite3_dep, dtp_dep],
     install: true
 )

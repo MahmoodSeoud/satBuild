@@ -19,15 +19,24 @@
 
 #include <slash/slash.h>
 #include <slash/optparse.h>
+#include <pthread.h>
+
 #include <csp/csp.h>
 #include <apm/csh_api.h>
+#include <dtp/dtp.h>
+#include <dtp/dtp_file_payload.h>
 #include "deploy.pb-c.h"
 #include "config.h"
 #include "history.h"
 #include "output.h"
 
 #define SATDEPLOY_PORT 20
-#define DEFAULT_TIMEOUT 10000
+#define DEFAULT_TIMEOUT 30000
+
+/* DTP defaults */
+#define DTP_DEFAULT_MTU          1024
+#define DTP_DEFAULT_THROUGHPUT   10000000
+#define DTP_DEFAULT_TIMEOUT_S    60
 
 /*
  * Tab completion for app names from config
@@ -262,7 +271,27 @@ static int satdeploy_status_cmd(struct slash *slash)
     return SLASH_SUCCESS;
 }
 
-#define CHUNK_SIZE 1400
+/*
+ * DTP server support — override weak get_payload_meta from libdtp
+ * to use the file-based payload registry.
+ */
+bool get_payload_meta(dtp_payload_meta_t *meta, uint8_t payload_id) {
+    return dtp_file_payload_get_meta(meta, payload_id);
+}
+
+/* DTP server thread context */
+typedef struct {
+    bool exit_flag;
+} dtp_server_ctx_t;
+
+static void *dtp_server_thread(void *arg) {
+    dtp_server_ctx_t *ctx = (dtp_server_ctx_t *)arg;
+    dtp_server_main(&ctx->exit_flag);
+    return NULL;
+}
+
+/* Payload ID counter */
+static uint8_t next_payload_id = 1;
 
 /**
  * Deploy a single app to the target node.
@@ -352,101 +381,67 @@ static int deploy_single_app(unsigned int node, char *app_name,
             satdeploy__deploy_response__free_unpacked(status_resp, NULL);
     }
 
-    /* Calculate number of chunks needed */
-    uint32_t total_chunks = (file_size + CHUNK_SIZE - 1) / CHUNK_SIZE;
-    if (total_chunks == 0) total_chunks = 1;
-
     if (adhoc_mode) {
         printf("  Ad-hoc mode: no service restart, no dependency ordering.\n");
         printf("  To configure as a managed app, add it to config.yaml.\n\n");
     }
-    printf("Deploying %s:\n", app_name);
+    printf("Deploying %s via DTP:\n", app_name);
     printf("  Local:    %s\n", local_path);
     printf("  Remote:   %s\n", remote_path);
-    printf("  Size:     %u bytes (%u chunks)\n", file_size, total_chunks);
+    printf("  Size:     %u bytes\n", file_size);
     printf("  Checksum: %s\n", checksum);
     printf("  Target:   node %u\n", node);
 
-    /* Open local file for reading */
-    FILE *f = fopen(local_path, "rb");
-    if (!f) {
-        printf("Error: Cannot open file '%s'\n", local_path);
+    /* Step 1: Register the file as a DTP payload */
+    uint8_t payload_id = next_payload_id++;
+    if (!dtp_file_payload_add(payload_id, local_path)) {
+        printf("Error: Failed to register file as DTP payload\n");
         return SLASH_EIO;
     }
 
-    /* Step 1: Send UPLOAD_START */
-    printf("Sending UPLOAD_START to node %u...\n", node);
-    Satdeploy__DeployRequest start_req = SATDEPLOY__DEPLOY_REQUEST__INIT;
-    start_req.command = SATDEPLOY__DEPLOY_COMMAND__CMD_UPLOAD_START;
-    start_req.app_name = app_name;
-    start_req.remote_path = (char *)remote_path;
-    start_req.expected_size = file_size;
-    start_req.expected_checksum = checksum;
-    start_req.total_chunks = total_chunks;
+    /* Step 2: Start DTP server in background thread */
+    dtp_server_ctx_t dtp_ctx = { .exit_flag = false };
+    pthread_t dtp_thread;
+    if (pthread_create(&dtp_thread, NULL, dtp_server_thread, &dtp_ctx) != 0) {
+        printf("Error: Failed to start DTP server thread\n");
+        dtp_file_payload_del(payload_id);
+        return SLASH_EIO;
+    }
+
+    /* Step 3: Send CMD_DEPLOY — agent will pull the file via DTP */
+    uint16_t ground_node = csp_conf.address;
+
+    printf("Deploying via DTP (ground node %u, payload %u)...\n", ground_node, payload_id);
+
+    Satdeploy__DeployRequest deploy_req = SATDEPLOY__DEPLOY_REQUEST__INIT;
+    deploy_req.command = SATDEPLOY__DEPLOY_COMMAND__CMD_DEPLOY;
+    deploy_req.app_name = app_name;
+    deploy_req.remote_path = (char *)remote_path;
+    deploy_req.expected_size = file_size;
+    deploy_req.expected_checksum = checksum;
+    deploy_req.dtp_server_node = ground_node;
+    deploy_req.dtp_server_port = 7;
+    deploy_req.payload_id = payload_id;
+    deploy_req.dtp_mtu = DTP_DEFAULT_MTU;
+    deploy_req.dtp_throughput = DTP_DEFAULT_THROUGHPUT;
+    deploy_req.dtp_timeout = DTP_DEFAULT_TIMEOUT_S;
+
+    /* Get file mode */
+    struct stat st;
+    if (stat(local_path, &st) == 0) {
+        deploy_req.file_mode = st.st_mode & 0777;
+    }
 
     Satdeploy__DeployResponse *resp = NULL;
-    if (send_deploy_request(node, &start_req, &resp) < 0) {
-        fclose(f);
-        return SLASH_EIO;
-    }
+    int rc = send_deploy_request(node, &deploy_req, &resp);
 
-    if (!resp->success) {
-        printf("UPLOAD_START failed: %s\n", resp->error_message);
-        satdeploy__deploy_response__free_unpacked(resp, NULL);
-        fclose(f);
-        return SLASH_EIO;
-    }
-    satdeploy__deploy_response__free_unpacked(resp, NULL);
-    resp = NULL;
+    /* Step 4: Stop DTP server and clean up */
+    dtp_ctx.exit_flag = true;
+    pthread_join(dtp_thread, NULL);
+    dtp_file_payload_del(payload_id);
 
-    /* Step 2: Send file chunks */
-    uint8_t chunk_buf[CHUNK_SIZE];
-    uint32_t chunk_seq = 0;
-    size_t bytes_sent = 0;
-
-    printf("Uploading: ");
-    fflush(stdout);
-
-    while (!feof(f)) {
-        size_t n = fread(chunk_buf, 1, CHUNK_SIZE, f);
-        if (n == 0) break;
-
-        Satdeploy__DeployRequest chunk_req = SATDEPLOY__DEPLOY_REQUEST__INIT;
-        chunk_req.command = SATDEPLOY__DEPLOY_COMMAND__CMD_UPLOAD_CHUNK;
-        chunk_req.chunk_seq = chunk_seq;
-        chunk_req.chunk_data.data = chunk_buf;
-        chunk_req.chunk_data.len = n;
-
-        if (send_deploy_request(node, &chunk_req, &resp) < 0) {
-            printf("\nChunk %u failed: no response\n", chunk_seq);
-            fclose(f);
-            return SLASH_EIO;
-        }
-
-        if (!resp->success) {
-            printf("\nChunk %u failed: %s\n", chunk_seq, resp->error_message);
-            satdeploy__deploy_response__free_unpacked(resp, NULL);
-            fclose(f);
-            return SLASH_EIO;
-        }
-        satdeploy__deploy_response__free_unpacked(resp, NULL);
-        resp = NULL;
-
-        bytes_sent += n;
-        chunk_seq++;
-
-        printf(".");
-        fflush(stdout);
-    }
-    fclose(f);
-    printf(" done (%zu bytes)\n", bytes_sent);
-
-    /* Step 3: Send UPLOAD_END */
-    printf("Sending UPLOAD_END...\n");
-    Satdeploy__DeployRequest end_req = SATDEPLOY__DEPLOY_REQUEST__INIT;
-    end_req.command = SATDEPLOY__DEPLOY_COMMAND__CMD_UPLOAD_END;
-
-    if (send_deploy_request(node, &end_req, &resp) < 0) {
+    if (rc < 0) {
+        printf("Error: No response from agent (timeout)\n");
         return SLASH_EIO;
     }
 
@@ -457,7 +452,7 @@ static int deploy_single_app(unsigned int node, char *app_name,
     }
 
     char success_msg[256];
-    snprintf(success_msg, sizeof(success_msg), "Deployed %s (%s)", app_name, checksum);
+    snprintf(success_msg, sizeof(success_msg), "Deployed %s (%s) via DTP", app_name, checksum);
     output_success(success_msg);
 
     satdeploy__deploy_response__free_unpacked(resp, NULL);
