@@ -26,6 +26,7 @@
 #include <apm/csh_api.h>
 #include <dtp/dtp.h>
 #include <dtp/dtp_file_payload.h>
+#include <dtp/dtp_protocol.h>
 #include "deploy.pb-c.h"
 #include "config.h"
 #include "history.h"
@@ -280,14 +281,53 @@ bool get_payload_meta(dtp_payload_meta_t *meta, uint8_t payload_id) {
     return dtp_file_payload_get_meta(meta, payload_id);
 }
 
-/* DTP server thread context */
+/* DTP server thread — custom loop that holds the RDP connection open
+ * long enough for the client to read the metadata response.
+ * The stock dtp_server_run() closes immediately after sending data,
+ * which races with the client on small files. */
 typedef struct {
     bool exit_flag;
 } dtp_server_ctx_t;
 
 static void *dtp_server_thread(void *arg) {
     dtp_server_ctx_t *ctx = (dtp_server_ctx_t *)arg;
-    dtp_server_main(&ctx->exit_flag);
+
+    csp_socket_t sock = {0};
+    sock.opts = CSP_O_RDP;
+    if (csp_bind(&sock, 7) != CSP_ERR_NONE) {
+        printf("[dtp-server] Failed to bind port 7\n");
+        return NULL;
+    }
+    csp_listen(&sock, 1);
+
+    while (!ctx->exit_flag) {
+        csp_conn_t *conn = csp_accept(&sock, 1000);
+        if (!conn) continue;
+
+        csp_packet_t *packet = csp_read(conn, 10000);
+        if (!packet) {
+            csp_close(conn);
+            continue;
+        }
+
+        packet = setup_server_transfer(&server_transfer_ctx, csp_conn_src(conn), packet);
+        server_transfer_ctx.keep_running = true;
+        if (packet) {
+            csp_send(conn, packet);
+            /* Give the client time to process the metadata response
+             * before we start blasting data packets */
+            usleep(200000);  /* 200ms */
+            start_sending_data(&server_transfer_ctx);
+        }
+        server_transfer_ctx.keep_running = false;
+
+        /* Hold the RDP connection open so the RST doesn't race
+         * with the metadata response on small transfers */
+        usleep(500000);  /* 500ms */
+        csp_close(conn);
+    }
+
+    csp_socket_close(&sock);
     return NULL;
 }
 
