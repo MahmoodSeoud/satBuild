@@ -4,3 +4,7 @@ __pycache__/
 .venv/
 *.egg-info/
 notes/features/
+.DS_Store
+.gstack/
+build/
+dist/
