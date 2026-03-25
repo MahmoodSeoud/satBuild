@@ -376,41 +376,26 @@ def _generate_completion_script(shell: str) -> str:
     return result.stdout
 
 
-def _install_completion(quiet: bool = False) -> bool:
+def _install_completion() -> bool:
     """Install shell completion to the system completions directory.
 
     Writes a completion file where the shell auto-loads it (like gh, docker).
-    No rc file edits needed — works on next shell start.
+    Silent unless it actually installs something new.
     """
     shell = _detect_shell()
     comp_path = _get_completion_path(shell)
-    if comp_path is None:
-        if not quiet:
-            click.echo(warning("Could not find a completion directory for your shell"))
-        return False
-
-    # Already installed?
-    if comp_path.exists():
-        if not quiet:
-            click.echo(f"  Shell completion already installed at {comp_path}")
-        return True
+    if comp_path is None or comp_path.exists():
+        return comp_path is not None
 
     script = _generate_completion_script(shell)
     if not script.strip():
-        if not quiet:
-            click.echo(warning("Failed to generate completion script"))
         return False
 
     try:
         comp_path.parent.mkdir(parents=True, exist_ok=True)
         comp_path.write_text(script)
-        if not quiet:
-            click.echo(success(f"Shell completion installed to {comp_path}"))
-            click.echo("  Works automatically in new shell sessions.")
         return True
-    except OSError as e:
-        if not quiet:
-            click.echo(warning(f"Could not write to {comp_path}: {e}"))
+    except OSError:
         return False
 
 
@@ -493,8 +478,6 @@ def init(config_path: Path | None):
     click.echo(success(f"Config saved to {config.config_path}"))
     click.echo(f"  Edit local and remote paths in {config.config_path}")
 
-    # Auto-install shell completion
-    click.echo("")
     _install_completion()
 
 
