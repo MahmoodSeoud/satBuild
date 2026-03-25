@@ -15,7 +15,7 @@
 #include <unistd.h>
 #include <sys/stat.h>
 
-#include <openssl/evp.h>
+#include "sha256.h"
 
 #include <slash/slash.h>
 #include <slash/optparse.h>
@@ -129,29 +129,18 @@ static int compute_checksum(const char *path, char *hash_out, size_t hash_size)
     }
 
     /* SHA256 hash - first 8 hex chars, matches agent and ground station */
-    EVP_MD_CTX *ctx = EVP_MD_CTX_new();
-    if (ctx == NULL) {
-        fclose(f);
-        return -1;
-    }
-
-    if (EVP_DigestInit_ex(ctx, EVP_sha256(), NULL) != 1) {
-        EVP_MD_CTX_free(ctx);
-        fclose(f);
-        return -1;
-    }
+    sha256_ctx ctx;
+    sha256_init(&ctx);
 
     unsigned char buf[4096];
     size_t n;
     while ((n = fread(buf, 1, sizeof(buf), f)) > 0) {
-        EVP_DigestUpdate(ctx, buf, n);
+        sha256_update(&ctx, buf, n);
     }
     fclose(f);
 
-    unsigned char digest[EVP_MAX_MD_SIZE];
-    unsigned int digest_len;
-    EVP_DigestFinal_ex(ctx, digest, &digest_len);
-    EVP_MD_CTX_free(ctx);
+    unsigned char digest[32];
+    sha256_final(&ctx, digest);
 
     snprintf(hash_out, hash_size, "%02x%02x%02x%02x",
              digest[0], digest[1], digest[2], digest[3]);

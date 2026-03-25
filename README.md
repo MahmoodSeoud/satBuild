@@ -341,14 +341,16 @@ For other toolchains, point meson at your own cross-compilation file and build n
 
 ```bash
 # System dependencies (Ubuntu/Debian):
-sudo apt install libzmq3-dev libsocketcan-dev libyaml-dev libbsd-dev \
-  libprotobuf-c-dev libssl-dev libsqlite3-dev
+sudo apt install build-essential pkg-config meson ninja-build \
+  libzmq3-dev libsocketcan-dev libbsd-dev
 
 cd satdeploy-apm
 meson setup build
 ninja -C build
 cp build/libcsh_satdeploy_apm.so ~/.local/lib/csh/
 ```
+
+> **Note:** libyaml, protobuf-c, and sqlite3 are bundled automatically via meson wraps — no system packages needed. OpenSSL is not required (SHA256 is built-in).
 
 ## Requirements
 
