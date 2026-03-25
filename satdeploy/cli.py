@@ -283,6 +283,17 @@ def config_option(f):
     )(f)
 
 
+def node_option(f):
+    """Shared -n/--node option for targeting a specific CSP node."""
+    return click.option(
+        "-n", "--node",
+        "node_override",
+        type=int,
+        default=None,
+        help="Target CSP node (overrides agent_node from config)",
+    )(f)
+
+
 class AppNameType(click.ParamType):
     """Click parameter type with shell completion for app names from config."""
 
@@ -458,11 +469,29 @@ def init(config_path: Path | None):
 
     data["backup_dir"] = "/opt/satdeploy/backups"
     data["max_backups"] = 10
-    data["apps"] = {}
+
+    if transport == "ssh":
+        data["apps"] = {
+            "my_app": {
+                "local": "./build/my_app",
+                "remote": "/opt/app/bin/my_app",
+                "service": "my_app.service",
+            }
+        }
+    else:
+        data["apps"] = {
+            "my_app": {
+                "local": "./build/my_app",
+                "remote": "/opt/app/bin/my_app",
+                "service": None,
+                "param": None,
+            }
+        }
 
     config.save(data)
     click.echo("")
     click.echo(success(f"Config saved to {config.config_path}"))
+    click.echo("Edit the config, then run: satdeploy push my_app")
 
     # Auto-install shell completion
     click.echo("")
@@ -496,38 +525,37 @@ def completion(install: bool, uninstall: bool):
 
 @main.command()
 @click.argument("apps", nargs=-1, type=APP_NAME)
-@click.option("--all", "all_apps", is_flag=True, help="Deploy all apps")
-@click.option("--clean-vmem", is_flag=True, help="Clear vmem for deployed apps")
+@click.option("-a", "--all", "all_apps", is_flag=True, help="Deploy all apps")
 @click.option(
-    "--local",
+    "-f", "--file", "--local",
+    "local",
     type=click.Path(exists=False),
     default=None,
-    help="Override local path for the file",
+    help="Local file path (overrides config)",
 )
 @click.option(
-    "--remote",
+    "-r", "--remote",
     "remote_override",
     type=click.Path(),
     default=None,
     help="Remote path on target (enables ad-hoc push without config entry)",
 )
+@click.option(
+    "-F", "--force",
+    is_flag=True,
+    default=False,
+    help="Force deploy even if same version",
+)
 @config_option
-@click.option("--dry-run", is_flag=True, help="Show what would happen without deploying")
-@click.option("-y", "--yes", is_flag=True, help="Skip confirmation prompts")
-@click.option("--require-clean", is_flag=True, help="Refuse to deploy from dirty git tree")
-@click.option("--provenance", "provenance_override", default=None,
-              help="Manual provenance string (overrides auto-detection from git/CI)")
+@node_option
 def push(
     apps: tuple[str, ...],
     all_apps: bool,
-    clean_vmem: bool,
     local: str | None,
     remote_override: str | None,
+    force: bool,
     config_path: Path | None,
-    dry_run: bool,
-    yes: bool,
-    require_clean: bool,
-    provenance_override: str | None,
+    node_override: int | None,
 ):
     """Deploy one or more apps to a target.
 
@@ -584,10 +612,6 @@ def push(
         click.echo(f"    local:  {local_path} ({size_str})")
         click.echo(f"    remote: {remote_override}")
 
-        if not yes and not dry_run:
-            if not click.confirm("Continue?"):
-                click.echo("Aborted.")
-                return
     else:
         # Handle --all vs app list
         if not apps and not all_apps:
@@ -601,6 +625,8 @@ def push(
                 raise SatDeployError("No apps configured")
 
     module_config = config.get_target()
+    if node_override:
+        module_config.agent_node = node_override
 
     # Only allow single app when using --local override
     if local and len(apps) > 1 and not adhoc_mode:
@@ -620,73 +646,16 @@ def push(
             return adhoc_app_configs[name]
         return get_app_config_or_error(config, name)
 
-    # Dry-run: show what would happen and exit
-    if dry_run:
-        target_name = module_config.zmq_endpoint if module_config.transport == "csp" else module_config.host
-        click.echo(click.style(f"Dry run — no changes will be made", bold=True))
-        click.echo(f"Target: {target_name} ({module_config.transport})")
-        click.echo("")
-        for app_name in apps:
-            app_cfg = _get_app_cfg(app_name)
-            lp = os.path.expanduser(local or app_cfg.local) if len(apps) == 1 else os.path.expanduser(app_cfg.local)
-            file_size = os.path.getsize(lp)
-            local_hash = compute_file_hash(lp)
-            size_str = f"{file_size / 1024:.1f} KB" if file_size < 1024 * 1024 else f"{file_size / (1024 * 1024):.1f} MB"
-            provenance, prov_source = resolve_provenance(lp, manual_override=provenance_override)
-            click.echo(f"  {SYMBOLS['arrow']} {app_name}")
-            click.echo(f"    local:   {lp} ({size_str}, {local_hash})")
-            click.echo(f"    remote:  {app_cfg.remote}")
-            if provenance:
-                click.echo(f"    provenance: {provenance} ({prov_source})")
-            else:
-                click.echo(f"    provenance: none (file not in a git repo)")
-            if app_cfg.service:
-                services = get_services_to_manage(config, app_name, app_cfg.service)
-                svc_names = [s[1] for s in services]
-                click.echo(f"    services: {', '.join(svc_names)} (will restart)")
-        click.echo("")
-        click.echo("Run without --dry-run to deploy.")
-        return
-
     # Resolve provenance for each app (fail fast before connecting)
-    # Priority: --provenance flag > CI env vars > local git state
     provenance_map = {}  # app_name -> (provenance_string, source)
     for app_name in apps:
         app_cfg = _get_app_cfg(app_name)
         local_path_prov = os.path.expanduser(local or app_cfg.local) if len(apps) == 1 else os.path.expanduser(app_cfg.local)
-        provenance, prov_source = resolve_provenance(local_path_prov, manual_override=provenance_override)
+        provenance, prov_source = resolve_provenance(local_path_prov)
         provenance_map[app_name] = (provenance, prov_source)
-
-        # --require-clean: check provenance dirty flag, or fall back to CWD git status
-        if require_clean and prov_source == "local":
-            if is_dirty(provenance):
-                raise SatDeployError(
-                    "Refusing to deploy from dirty git tree. Commit your changes first."
-                )
-            if provenance is None:
-                # Binary is outside any git repo — check CWD instead
-                import subprocess
-                result = subprocess.run(
-                    ["git", "diff-index", "--quiet", "HEAD", "--"],
-                    capture_output=True, timeout=5,
-                )
-                if result.returncode != 0:
-                    raise SatDeployError(
-                        "Refusing to deploy from dirty git tree. Commit your changes first."
-                    )
 
         if prov_source == "local" and is_dirty(provenance):
             click.echo(warning(f"Deploying from uncommitted changes — file tagged as {provenance}"))
-
-    # Confirmation prompt for multi-app deploys
-    if len(apps) > 1 and not yes:
-        target_name = module_config.zmq_endpoint if module_config.transport == "csp" else module_config.host
-        click.echo(f"This will deploy {len(apps)} apps to {config.module_name} ({target_name}):")
-        for app_name in apps:
-            click.echo(f"  {SYMBOLS['bullet']} {app_name}")
-        if not click.confirm("Continue?"):
-            click.echo("Aborted.")
-            return
 
     history = get_history(config.history_path)
 
@@ -723,6 +692,7 @@ def push(
                     param_name=app_config.param,
                     appsys_node=module_config.appsys_node,
                     run_node=module_config.get_run_node(app),
+                    force=force,
                     on_progress=_show_progress,
                 )
 
@@ -818,6 +788,7 @@ def push(
                 local_path=local_path,
                 remote_path=remote_path,
                 services=services_to_manage,
+                force=force,
             )
 
             if result.success:
@@ -895,7 +866,8 @@ def push(
 
 @main.command()
 @config_option
-def status(config_path: Path | None):
+@node_option
+def status(config_path: Path | None, node_override: int | None):
     """Show status of deployed apps and services."""
     config = Config(config_path=config_path)
 
@@ -905,6 +877,8 @@ def status(config_path: Path | None):
         )
 
     module_config = config.get_target()
+    if node_override:
+        module_config.agent_node = node_override
     apps = config.apps
     history = get_history(config.history_path)
 
@@ -1087,7 +1061,8 @@ def status(config_path: Path | None):
 @main.command("list")
 @click.argument("app", type=APP_NAME)
 @config_option
-def list_backups(app: str, config_path: Path | None):
+@node_option
+def list_backups(app: str, config_path: Path | None, node_override: int | None):
     """List all versions of an app (deployed + backups).
 
     APP is the name of the application to list versions for.
@@ -1103,6 +1078,8 @@ def list_backups(app: str, config_path: Path | None):
         )
 
     module_config = config.get_target()
+    if node_override:
+        module_config.agent_node = node_override
     history = get_history(config.history_path)
 
     # Get currently deployed version from history
@@ -1268,14 +1245,17 @@ def list_backups(app: str, config_path: Path | None):
 @main.command()
 @click.argument("app", type=APP_NAME)
 @click.argument("hash", required=False, default=None)
+@click.option("-H", "--hash", "hash_option", default=None,
+              help="Specific backup hash to restore")
 @config_option
-def rollback(app: str, hash: str | None, config_path: Path | None):  # noqa: A002
+@node_option
+def rollback(app: str, hash: str | None, hash_option: str | None, config_path: Path | None, node_override: int | None):  # noqa: A002
     """Rollback to a previous version.
 
     APP is the name of the application to rollback.
     HASH is the optional backup hash to restore (defaults to previous version).
     """
-    target_hash = hash  # Rename to avoid shadowing builtin
+    target_hash = hash_option or hash  # -H flag takes precedence over positional
     config = Config(config_path=config_path)
 
     if config.load() is None:
@@ -1284,6 +1264,8 @@ def rollback(app: str, hash: str | None, config_path: Path | None):  # noqa: A00
         )
 
     module_config = config.get_target()
+    if node_override:
+        module_config.agent_node = node_override
     history = get_history(config.history_path)
     backup_path = None
 
@@ -1521,14 +1503,14 @@ def config(config_path: Path | None):
 @main.command()
 @click.argument("app", type=APP_NAME)
 @click.option(
-    "--lines",
-    "-n",
+    "-l", "--lines",
     type=int,
     default=100,
     help="Number of lines to show (default: 100)",
 )
 @config_option
-def logs(app: str, lines: int, config_path: Path | None):
+@node_option
+def logs(app: str, lines: int, config_path: Path | None, node_override: int | None):
     """Show logs for an app's service.
 
     APP is the name of the application to show logs for.
@@ -1539,6 +1521,10 @@ def logs(app: str, lines: int, config_path: Path | None):
         raise SatDeployError(
             f"Config not found at {config.config_path}. Run 'satdeploy init' first."
         )
+
+    module_config = config.get_target()
+    if node_override:
+        module_config.agent_node = node_override
 
     app_config = get_app_config_or_error(config, app)
 
@@ -1595,7 +1581,3 @@ def shell():
     demo_module.demo_shell()
 
 
-@demo.command()
-def eject():
-    """Generate a real config template for your hardware."""
-    demo_module.demo_eject()

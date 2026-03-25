@@ -97,6 +97,7 @@ class SSHTransport(Transport):
         run_node: Optional[int] = None,
         expected_checksum: Optional[str] = None,
         services: Optional[list[tuple[str, str]]] = None,
+        force: bool = False,
     ) -> DeployResult:
         """Deploy a file via SSH/SFTP.
 
@@ -127,8 +128,8 @@ class SSHTransport(Transport):
             local_hash = compute_file_hash(local_path)
             remote_hash = self._deployer.compute_remote_hash(remote_path)
 
-            # Hash-skip: same file already deployed
-            if local_hash and remote_hash and local_hash == remote_hash:
+            # Hash-skip: same file already deployed (unless --force)
+            if not force and local_hash and remote_hash and local_hash == remote_hash:
                 return DeployResult(
                     success=True,
                     file_hash=local_hash,

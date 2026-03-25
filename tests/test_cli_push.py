@@ -678,196 +678,6 @@ class TestPushPolishedOutput:
         assert SYMBOLS["check"] in result.output
 
 
-class TestPushDryRun:
-    """Test --dry-run flag."""
-
-    @patch("satdeploy.cli.get_transport")
-    def test_dry_run_shows_plan_without_deploying(self, mock_get_transport, tmp_path):
-        """--dry-run should show what would happen without actually deploying."""
-        runner = CliRunner()
-        config_dir = tmp_path / ".satdeploy"
-        config_dir.mkdir()
-
-        binary = tmp_path / "controller"
-        binary.write_bytes(b"binary content for dry run test")
-
-        config_file = config_dir / "config.yaml"
-        config_file.write_text(
-            yaml.dump(
-                make_config({
-                    "controller": {
-                        "local": str(binary),
-                        "remote": "/opt/disco/bin/controller",
-                        "service": "controller.service",
-                    }
-                })
-            )
-        )
-
-        result = runner.invoke(
-            main,
-            ["push", "controller", "--dry-run", "--config", str(config_dir / "config.yaml")],
-        )
-
-        assert result.exit_code == 0
-        assert "Dry run" in result.output
-        assert "controller" in result.output
-        assert "/opt/disco/bin/controller" in result.output
-        # Transport should never be created in dry-run mode
-        mock_get_transport.assert_not_called()
-
-    @patch("satdeploy.cli.get_transport")
-    def test_dry_run_shows_file_size(self, mock_get_transport, tmp_path):
-        """--dry-run should show the binary file size."""
-        runner = CliRunner()
-        config_dir = tmp_path / ".satdeploy"
-        config_dir.mkdir()
-
-        binary = tmp_path / "controller"
-        binary.write_bytes(b"x" * 2048)  # 2 KB
-
-        config_file = config_dir / "config.yaml"
-        config_file.write_text(
-            yaml.dump(
-                make_config({
-                    "controller": {
-                        "local": str(binary),
-                        "remote": "/opt/disco/bin/controller",
-                        "service": "controller.service",
-                    }
-                })
-            )
-        )
-
-        result = runner.invoke(
-            main,
-            ["push", "controller", "--dry-run", "--config", str(config_dir / "config.yaml")],
-        )
-
-        assert result.exit_code == 0
-        assert "KB" in result.output
-
-
-class TestPushConfirmation:
-    """Test confirmation prompts."""
-
-    @patch("satdeploy.cli.get_transport")
-    def test_push_all_prompts_for_confirmation(self, mock_get_transport, tmp_path):
-        """push --all should ask for confirmation when deploying multiple apps."""
-        runner = CliRunner()
-        config_dir = tmp_path / ".satdeploy"
-        config_dir.mkdir()
-
-        binary1 = tmp_path / "app1"
-        binary1.write_bytes(b"app1 binary")
-        binary2 = tmp_path / "app2"
-        binary2.write_bytes(b"app2 binary")
-
-        config_file = config_dir / "config.yaml"
-        config_file.write_text(
-            yaml.dump(
-                make_config({
-                    "app1": {
-                        "local": str(binary1),
-                        "remote": "/opt/bin/app1",
-                        "service": "app1.service",
-                    },
-                    "app2": {
-                        "local": str(binary2),
-                        "remote": "/opt/bin/app2",
-                        "service": "app2.service",
-                    },
-                })
-            )
-        )
-
-        # Answer "no" to confirmation
-        result = runner.invoke(
-            main,
-            ["push", "--all", "--config", str(config_dir / "config.yaml")],
-            input="n\n",
-        )
-
-        assert result.exit_code == 0
-        assert "Aborted" in result.output
-        mock_get_transport.assert_not_called()
-
-    @patch("satdeploy.cli.get_transport")
-    def test_push_all_with_yes_skips_confirmation(self, mock_get_transport, tmp_path):
-        """push --all -y should skip confirmation."""
-        runner = CliRunner()
-        config_dir = tmp_path / ".satdeploy"
-        config_dir.mkdir()
-
-        binary1 = tmp_path / "app1"
-        binary1.write_bytes(b"app1 binary")
-        binary2 = tmp_path / "app2"
-        binary2.write_bytes(b"app2 binary")
-
-        config_file = config_dir / "config.yaml"
-        config_file.write_text(
-            yaml.dump(
-                make_config({
-                    "app1": {
-                        "local": str(binary1),
-                        "remote": "/opt/bin/app1",
-                        "service": "app1.service",
-                    },
-                    "app2": {
-                        "local": str(binary2),
-                        "remote": "/opt/bin/app2",
-                        "service": "app2.service",
-                    },
-                })
-            )
-        )
-
-        transport = make_mock_transport()
-        mock_get_transport.return_value = transport
-
-        result = runner.invoke(
-            main,
-            ["push", "--all", "-y", "--config", str(config_dir / "config.yaml")],
-        )
-
-        assert result.exit_code == 0
-        assert "Aborted" not in result.output
-
-    @patch("satdeploy.cli.get_transport")
-    def test_push_single_app_no_confirmation(self, mock_get_transport, tmp_path):
-        """push with a single app should not ask for confirmation."""
-        runner = CliRunner()
-        config_dir = tmp_path / ".satdeploy"
-        config_dir.mkdir()
-
-        binary = tmp_path / "controller"
-        binary.write_bytes(b"binary content")
-
-        config_file = config_dir / "config.yaml"
-        config_file.write_text(
-            yaml.dump(
-                make_config({
-                    "controller": {
-                        "local": str(binary),
-                        "remote": "/opt/disco/bin/controller",
-                        "service": "controller.service",
-                    }
-                })
-            )
-        )
-
-        transport = make_mock_transport()
-        mock_get_transport.return_value = transport
-
-        result = runner.invoke(
-            main,
-            ["push", "controller", "--config", str(config_dir / "config.yaml")],
-        )
-
-        assert result.exit_code == 0
-        assert "Continue?" not in result.output
-
-
 class TestPushHealthCheck:
     """Test post-deploy health checks."""
 
@@ -1001,74 +811,6 @@ class TestPushProvenance:
 
     @patch("satdeploy.cli.resolve_provenance", return_value=("main@abc12345-dirty", "local"))
     @patch("satdeploy.cli.get_transport")
-    def test_push_require_clean_rejects_dirty(self, mock_get_transport, mock_provenance, tmp_path):
-        """Push with --require-clean should reject dirty git tree."""
-        runner = CliRunner()
-        config_dir = tmp_path / ".satdeploy"
-        config_dir.mkdir()
-
-        binary = tmp_path / "controller"
-        binary.write_bytes(b"binary content")
-
-        config_file = config_dir / "config.yaml"
-        config_file.write_text(
-            yaml.dump(
-                make_config({
-                    "controller": {
-                        "local": str(binary),
-                        "remote": "/opt/disco/bin/controller",
-                        "service": "controller.service",
-                    }
-                })
-            )
-        )
-
-        result = runner.invoke(
-            main,
-            ["push", "controller", "--require-clean", "--config", str(config_dir / "config.yaml")],
-        )
-
-        assert result.exit_code != 0
-        assert "dirty" in result.output.lower()
-        mock_get_transport.assert_not_called()
-
-    @patch("satdeploy.cli.resolve_provenance", return_value=("main@abc12345", "local"))
-    @patch("satdeploy.cli.get_transport")
-    def test_push_require_clean_allows_clean(self, mock_get_transport, mock_provenance, tmp_path):
-        """Push with --require-clean should succeed when tree is clean."""
-        runner = CliRunner()
-        config_dir = tmp_path / ".satdeploy"
-        config_dir.mkdir()
-
-        binary = tmp_path / "controller"
-        binary.write_bytes(b"binary content")
-
-        config_file = config_dir / "config.yaml"
-        config_file.write_text(
-            yaml.dump(
-                make_config({
-                    "controller": {
-                        "local": str(binary),
-                        "remote": "/opt/disco/bin/controller",
-                        "service": "controller.service",
-                    }
-                })
-            )
-        )
-
-        transport = make_mock_transport()
-        mock_get_transport.return_value = transport
-
-        result = runner.invoke(
-            main,
-            ["push", "controller", "--require-clean", "--config", str(config_dir / "config.yaml")],
-        )
-
-        assert result.exit_code == 0
-        assert "deployed" in result.output.lower() or "success" in result.output.lower()
-
-    @patch("satdeploy.cli.resolve_provenance", return_value=("main@abc12345-dirty", "local"))
-    @patch("satdeploy.cli.get_transport")
     def test_push_warns_on_dirty_tree(self, mock_get_transport, mock_provenance, tmp_path):
         """Push without --require-clean should warn on dirty tree but succeed."""
         runner = CliRunner()
@@ -1148,89 +890,6 @@ class TestPushProvenance:
         assert len(records) == 1
         assert records[0].git_hash is None
 
-    # Regression: ISSUE-001 — --require-clean silently passes when binary is outside git repo
-    # Found by /qa on 2026-03-24
-    @patch("satdeploy.cli.resolve_provenance", return_value=(None, "local"))
-    @patch("satdeploy.cli.get_transport")
-    def test_require_clean_rejects_when_no_provenance_and_cwd_dirty(
-        self, mock_get_transport, mock_provenance, tmp_path
-    ):
-        """--require-clean should check CWD git status when binary has no provenance."""
-        runner = CliRunner()
-        config_dir = tmp_path / ".satdeploy"
-        config_dir.mkdir()
-
-        binary = tmp_path / "controller"
-        binary.write_bytes(b"binary content")
-
-        config_file = config_dir / "config.yaml"
-        config_file.write_text(
-            yaml.dump(
-                make_config({
-                    "controller": {
-                        "local": str(binary),
-                        "remote": "/opt/disco/bin/controller",
-                        "service": "controller.service",
-                    }
-                })
-            )
-        )
-
-        # Mock subprocess.run to simulate dirty CWD git status
-        with patch("subprocess.run") as mock_subprocess:
-            mock_subprocess.return_value = Mock(returncode=1)  # dirty
-
-            result = runner.invoke(
-                main,
-                ["push", "controller", "--require-clean", "--config", str(config_dir / "config.yaml")],
-            )
-
-        assert result.exit_code != 0
-        assert "dirty" in result.output.lower()
-        mock_get_transport.assert_not_called()
-
-    # Regression: ISSUE-001 — companion test for clean CWD
-    @patch("satdeploy.cli.resolve_provenance", return_value=(None, "local"))
-    @patch("satdeploy.cli.get_transport")
-    def test_require_clean_allows_when_no_provenance_and_cwd_clean(
-        self, mock_get_transport, mock_provenance, tmp_path
-    ):
-        """--require-clean should allow deploy when binary has no provenance but CWD is clean."""
-        runner = CliRunner()
-        config_dir = tmp_path / ".satdeploy"
-        config_dir.mkdir()
-
-        binary = tmp_path / "controller"
-        binary.write_bytes(b"binary content")
-
-        config_file = config_dir / "config.yaml"
-        config_file.write_text(
-            yaml.dump(
-                make_config({
-                    "controller": {
-                        "local": str(binary),
-                        "remote": "/opt/disco/bin/controller",
-                        "service": "controller.service",
-                    }
-                })
-            )
-        )
-
-        transport = make_mock_transport()
-        mock_get_transport.return_value = transport
-
-        # Mock subprocess.run to simulate clean CWD git status
-        with patch("subprocess.run") as mock_subprocess:
-            mock_subprocess.return_value = Mock(returncode=0)  # clean
-
-            result = runner.invoke(
-                main,
-                ["push", "controller", "--require-clean", "--config", str(config_dir / "config.yaml")],
-            )
-
-        assert result.exit_code == 0
-
-
 class TestAdhocPush:
     """Tests for ad-hoc push mode (--local + --remote without app name)."""
 
@@ -1256,7 +915,6 @@ class TestAdhocPush:
                 "--local", str(payload),
                 "--remote", "/opt/test/payload.txt",
                 "--config", str(config_file),
-                "-y",
             ],
         )
 
@@ -1289,7 +947,6 @@ class TestAdhocPush:
                 "--local", str(payload),
                 "--remote", "/opt/disco/bin/controller",
                 "--config", str(config_file),
-                "-y",
             ],
         )
 
@@ -1329,7 +986,6 @@ class TestAdhocPush:
                 "--local", str(payload),
                 "--remote", "/opt/disco/bin/controller",
                 "--config", str(config_file),
-                "-y",
             ],
         )
 
@@ -1425,7 +1081,6 @@ class TestAdhocPush:
                 "--local", str(payload),
                 "--remote", "/opt/test/payload.txt",
                 "--config", str(config_file),
-                "-y",
             ],
         )
 
@@ -1436,37 +1091,6 @@ class TestAdhocPush:
         assert len(records) == 1
         assert records[0].remote_path == "/opt/test/payload.txt"
         assert records[0].success is True
-
-    @patch("satdeploy.cli.get_transport")
-    def test_adhoc_push_shows_warning_and_prompts(self, mock_get_transport, tmp_path):
-        """Ad-hoc push without -y should show warning and prompt."""
-        runner = CliRunner()
-        config_dir = tmp_path / ".satdeploy"
-        config_dir.mkdir()
-        config_file = config_dir / "config.yaml"
-        config_file.write_text(yaml.dump(make_config({})))
-
-        payload = tmp_path / "test.txt"
-        payload.write_text("test")
-
-        transport = make_mock_transport()
-        mock_get_transport.return_value = transport
-
-        # Answer 'n' to the confirmation prompt
-        result = runner.invoke(
-            main,
-            [
-                "push",
-                "--local", str(payload),
-                "--remote", "/opt/test.txt",
-                "--config", str(config_file),
-            ],
-            input="n\n",
-        )
-
-        assert "Ad-hoc mode" in result.output
-        assert "Continue?" in result.output
-        transport.deploy.assert_not_called()
 
     @patch("satdeploy.cli.get_transport")
     def test_adhoc_push_no_service_restart(self, mock_get_transport, tmp_path):
@@ -1490,7 +1114,6 @@ class TestAdhocPush:
                 "--local", str(payload),
                 "--remote", "/opt/test.txt",
                 "--config", str(config_file),
-                "-y",
             ],
         )
 

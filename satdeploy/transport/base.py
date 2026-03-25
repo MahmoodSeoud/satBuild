@@ -84,6 +84,7 @@ class Transport(ABC):
         run_node: Optional[int] = None,
         expected_checksum: Optional[str] = None,
         services: Optional[list[tuple[str, str]]] = None,
+        force: bool = False,
     ) -> DeployResult:
         """Deploy a file to the target.
 

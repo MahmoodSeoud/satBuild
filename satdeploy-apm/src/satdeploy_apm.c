@@ -262,101 +262,19 @@ static int satdeploy_status_cmd(struct slash *slash)
     return SLASH_SUCCESS;
 }
 
-static int satdeploy_deploy_cmd(struct slash *slash)
+#define CHUNK_SIZE 1400
+
+/**
+ * Deploy a single app to the target node.
+ * Used by both single-app push and --all.
+ */
+static int deploy_single_app(unsigned int node, char *app_name,
+                              const char *local_override, const char *remote_override,
+                              int force, satdeploy_config_t *config)
 {
-    unsigned int node = 0;
-    char *app_name = NULL;
-    char *local_path = NULL;
-    char *remote_path = NULL;
-
-    int force = 0;
-
-    /*
-     * Reorder argv so positional args come after options.
-     * slash's optparse uses POSIX-style parsing (stops at first non-option),
-     * so "deploy test_app -f /tmp/binary" would fail without this.
-     */
-    int sub_argc = slash->argc - 1;
-    const char **sub_argv = (const char **)slash->argv + 1;
-    const char *reordered[32];
-    int nopt = 0, npos = 0;
-    const char *positional[8];
-
-    for (int i = 0; i < sub_argc && i < 30; i++) {
-        if (sub_argv[i][0] == '-') {
-            reordered[nopt++] = sub_argv[i];
-            /* Options that take a value: consume the next arg too */
-            if (i + 1 < sub_argc &&
-                (strcmp(sub_argv[i], "-f") == 0 || strcmp(sub_argv[i], "--file") == 0 ||
-                 strcmp(sub_argv[i], "-r") == 0 || strcmp(sub_argv[i], "--remote") == 0 ||
-                 strcmp(sub_argv[i], "-n") == 0 || strcmp(sub_argv[i], "--node") == 0)) {
-                reordered[nopt++] = sub_argv[++i];
-            }
-        } else {
-            if (npos < 8)
-                positional[npos++] = sub_argv[i];
-        }
-    }
-    /* Append positional args after options */
-    for (int i = 0; i < npos; i++)
-        reordered[nopt + i] = positional[i];
-    int total = nopt + npos;
-
-    optparse_t *parser = optparse_new("satdeploy push", "<app_name> | -f PATH -r PATH");
-    optparse_add_help(parser);
-    optparse_add_unsigned(parser, 'n', "node", "NUM", 0, &node, "Target node (default: from config)");
-    optparse_add_string(parser, 'f', "file", "PATH", &local_path, "Local file path (overrides config)");
-    optparse_add_string(parser, 'r', "remote", "PATH", &remote_path, "Remote installation path");
-    optparse_add_set(parser, 'F', "force", 1, &force, "Force deploy even if same version");
-
-    int argi = optparse_parse(parser, total, reordered);
-    if (argi < 0) {
-        optparse_del(parser);
-        return SLASH_EINVAL;
-    }
-
-    int adhoc_mode = 0;
-    static char derived_name[128];
-    if (argi >= total) {
-        /* No app name given — allow ad-hoc mode if both -f and -r are provided */
-        if (local_path && remote_path) {
-            /* Derive app name from remote path basename, strip extension */
-            const char *base = strrchr(remote_path, '/');
-            base = base ? base + 1 : remote_path;
-            strncpy(derived_name, base, sizeof(derived_name) - 1);
-            derived_name[sizeof(derived_name) - 1] = '\0';
-            /* Strip final extension */
-            char *dot = strrchr(derived_name, '.');
-            if (dot && dot != derived_name) {
-                *dot = '\0';
-            }
-            /* Replace remaining dots with dashes */
-            for (char *p = derived_name; *p; p++) {
-                if (*p == '.') *p = '-';
-            }
-            app_name = derived_name;
-            adhoc_mode = 1;
-        } else {
-            printf("Error: app_name required (or use -f and -r for ad-hoc push)\n");
-            optparse_help(parser, stdout);
-            optparse_del(parser);
-            return SLASH_EUSAGE;
-        }
-    } else {
-        app_name = (char *)reordered[argi];
-    }
-    optparse_del(parser);
-
-    /* Load config for defaults */
-    satdeploy_config_t *config = satdeploy_config_load();
-
-    /* Use agent_node from config if not specified via -n */
-    if (node == 0 && config && config->agent_node > 0) {
-        node = config->agent_node;
-    }
-    if (node == 0) {
-        node = slash_dfl_node;
-    }
+    const char *local_path = local_override;
+    const char *remote_path = remote_override;
+    int adhoc_mode = (local_override && remote_override);
 
     /* Look up app-specific config */
     satdeploy_app_config_t *app_config = NULL;
@@ -375,7 +293,7 @@ static int satdeploy_deploy_cmd(struct slash *slash)
     }
 
     /* Expand tilde in local_path */
-    static char expanded_path[MAX_PATH_LEN];
+    char expanded_path[MAX_PATH_LEN];
     if (local_path && local_path[0] == '~' && (local_path[1] == '/' || local_path[1] == '\0')) {
         const char *home = getenv("HOME");
         if (home) {
@@ -430,11 +348,11 @@ static int satdeploy_deploy_cmd(struct slash *slash)
                 }
             }
         }
-        satdeploy__deploy_response__free_unpacked(status_resp, NULL);
+        if (status_resp)
+            satdeploy__deploy_response__free_unpacked(status_resp, NULL);
     }
 
     /* Calculate number of chunks needed */
-    #define CHUNK_SIZE 1400
     uint32_t total_chunks = (file_size + CHUNK_SIZE - 1) / CHUNK_SIZE;
     if (total_chunks == 0) total_chunks = 1;
 
@@ -461,7 +379,7 @@ static int satdeploy_deploy_cmd(struct slash *slash)
     Satdeploy__DeployRequest start_req = SATDEPLOY__DEPLOY_REQUEST__INIT;
     start_req.command = SATDEPLOY__DEPLOY_COMMAND__CMD_UPLOAD_START;
     start_req.app_name = app_name;
-    start_req.remote_path = remote_path;
+    start_req.remote_path = (char *)remote_path;
     start_req.expected_size = file_size;
     start_req.expected_checksum = checksum;
     start_req.total_chunks = total_chunks;
@@ -517,7 +435,6 @@ static int satdeploy_deploy_cmd(struct slash *slash)
         bytes_sent += n;
         chunk_seq++;
 
-        /* Progress indicator */
         printf(".");
         fflush(stdout);
     }
@@ -544,8 +461,137 @@ static int satdeploy_deploy_cmd(struct slash *slash)
     output_success(success_msg);
 
     satdeploy__deploy_response__free_unpacked(resp, NULL);
-
     return SLASH_SUCCESS;
+}
+
+static int satdeploy_deploy_cmd(struct slash *slash)
+{
+    unsigned int node = 0;
+    char *app_name = NULL;
+    char *local_path = NULL;
+    char *remote_path = NULL;
+
+    int force = 0;
+
+    /*
+     * Reorder argv so positional args come after options.
+     * slash's optparse uses POSIX-style parsing (stops at first non-option),
+     * so "deploy test_app -f /tmp/binary" would fail without this.
+     */
+    int sub_argc = slash->argc - 1;
+    const char **sub_argv = (const char **)slash->argv + 1;
+    const char *reordered[32];
+    int nopt = 0, npos = 0;
+    const char *positional[8];
+
+    for (int i = 0; i < sub_argc && i < 30; i++) {
+        if (sub_argv[i][0] == '-') {
+            reordered[nopt++] = sub_argv[i];
+            /* Options that take a value: consume the next arg too */
+            if (i + 1 < sub_argc &&
+                (strcmp(sub_argv[i], "-f") == 0 || strcmp(sub_argv[i], "--file") == 0 ||
+                 strcmp(sub_argv[i], "-r") == 0 || strcmp(sub_argv[i], "--remote") == 0 ||
+                 strcmp(sub_argv[i], "-n") == 0 || strcmp(sub_argv[i], "--node") == 0)) {
+                reordered[nopt++] = sub_argv[++i];
+            }
+        } else {
+            if (npos < 8)
+                positional[npos++] = sub_argv[i];
+        }
+    }
+    /* Append positional args after options */
+    for (int i = 0; i < npos; i++)
+        reordered[nopt + i] = positional[i];
+    int total = nopt + npos;
+
+    int deploy_all = 0;
+    optparse_t *parser = optparse_new("satdeploy push", "<app_name> | -f PATH -r PATH | -a");
+    optparse_add_help(parser);
+    optparse_add_unsigned(parser, 'n', "node", "NUM", 0, &node, "Target node (default: from config)");
+    optparse_add_string(parser, 'f', "local", "PATH", &local_path, "Local file path (overrides config)");
+    optparse_add_string(parser, 'r', "remote", "PATH", &remote_path, "Remote installation path");
+    optparse_add_set(parser, 'F', "force", 1, &force, "Force deploy even if same version");
+    optparse_add_set(parser, 'a', "all", 1, &deploy_all, "Deploy all apps from config");
+
+    int argi = optparse_parse(parser, total, reordered);
+    if (argi < 0) {
+        optparse_del(parser);
+        return SLASH_EINVAL;
+    }
+
+    int adhoc_mode = 0;
+    static char derived_name[128];
+
+    /* Handle --all: deploy every app in config */
+    if (deploy_all) {
+        optparse_del(parser);
+        satdeploy_config_t *all_config = satdeploy_config_load();
+        if (!all_config || all_config->num_apps == 0) {
+            printf("Error: No apps configured\n");
+            return SLASH_EINVAL;
+        }
+        /* Use agent_node from config if not specified via -n */
+        if (node == 0 && all_config->agent_node > 0)
+            node = all_config->agent_node;
+        if (node == 0)
+            node = slash_dfl_node;
+
+        int failed = 0;
+        for (int i = 0; i < all_config->num_apps; i++) {
+            int rc = deploy_single_app(node, all_config->apps[i].name,
+                                       NULL, NULL, force, all_config);
+            if (rc != SLASH_SUCCESS) failed++;
+        }
+        if (failed > 0) {
+            printf("\n%d of %d deployments failed\n", failed, all_config->num_apps);
+            return SLASH_EIO;
+        }
+        printf("\n%d app(s) deployed\n", all_config->num_apps);
+        return SLASH_SUCCESS;
+    }
+
+    if (argi >= total) {
+        /* No app name given — allow ad-hoc mode if both -f and -r are provided */
+        if (local_path && remote_path) {
+            /* Derive app name from remote path basename, strip extension */
+            const char *base = strrchr(remote_path, '/');
+            base = base ? base + 1 : remote_path;
+            strncpy(derived_name, base, sizeof(derived_name) - 1);
+            derived_name[sizeof(derived_name) - 1] = '\0';
+            /* Strip final extension */
+            char *dot = strrchr(derived_name, '.');
+            if (dot && dot != derived_name) {
+                *dot = '\0';
+            }
+            /* Replace remaining dots with dashes */
+            for (char *p = derived_name; *p; p++) {
+                if (*p == '.') *p = '-';
+            }
+            app_name = derived_name;
+            adhoc_mode = 1;
+        } else {
+            printf("Error: app_name required (or use -f/-r for ad-hoc, or -a for all)\n");
+            optparse_help(parser, stdout);
+            optparse_del(parser);
+            return SLASH_EUSAGE;
+        }
+    } else {
+        app_name = (char *)reordered[argi];
+    }
+    optparse_del(parser);
+
+    /* Load config for defaults */
+    satdeploy_config_t *config = satdeploy_config_load();
+
+    /* Use agent_node from config if not specified via -n */
+    if (node == 0 && config && config->agent_node > 0) {
+        node = config->agent_node;
+    }
+    if (node == 0) {
+        node = slash_dfl_node;
+    }
+
+    return deploy_single_app(node, app_name, local_path, remote_path, force, config);
 }
 
 static int satdeploy_rollback_cmd(struct slash *slash)
