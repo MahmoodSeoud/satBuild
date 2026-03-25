@@ -472,17 +472,17 @@ def init(config_path: Path | None):
 
     if transport == "ssh":
         data["apps"] = {
-            "my_app": {
-                "local": "./build/my_app",
-                "remote": "/opt/app/bin/my_app",
-                "service": "my_app.service",
+            "example_app": {
+                "local": "/path/to/build/example_app",
+                "remote": "/opt/app/bin/example_app",
+                "service": "example_app.service",
             }
         }
     else:
         data["apps"] = {
-            "my_app": {
-                "local": "./build/my_app",
-                "remote": "/opt/app/bin/my_app",
+            "example_app": {
+                "local": "/path/to/build/example_app",
+                "remote": "/opt/app/bin/example_app",
                 "service": None,
                 "param": None,
             }
@@ -491,7 +491,7 @@ def init(config_path: Path | None):
     config.save(data)
     click.echo("")
     click.echo(success(f"Config saved to {config.config_path}"))
-    click.echo("Edit the config, then run: satdeploy push my_app")
+    click.echo(f"  Edit local and remote paths in {config.config_path}")
 
     # Auto-install shell completion
     click.echo("")
