@@ -286,22 +286,36 @@ bool get_payload_meta(dtp_payload_meta_t *meta, uint8_t payload_id) {
  * The stock dtp_server_run() closes immediately after sending data,
  * which races with the client on small files. */
 typedef struct {
-    bool exit_flag;
+    volatile bool exit_flag;
+    volatile bool ready;  /* set once port 7 is bound */
+    int bind_error;
 } dtp_server_ctx_t;
+
+/* Static socket — must outlive the thread since the CSP port table
+ * holds a pointer to it. Stack-local would leave a dangling ref. */
+static csp_socket_t dtp_server_sock;
 
 static void *dtp_server_thread(void *arg) {
     dtp_server_ctx_t *ctx = (dtp_server_ctx_t *)arg;
 
-    csp_socket_t sock = {0};
-    sock.opts = CSP_O_RDP;
-    if (csp_bind(&sock, 7) != CSP_ERR_NONE) {
-        printf("[dtp-server] Failed to bind port 7\n");
+    memset(&dtp_server_sock, 0, sizeof(dtp_server_sock));
+    dtp_server_sock.opts = CSP_O_RDP;
+
+    int rc = csp_bind(&dtp_server_sock, 7);
+    if (rc != CSP_ERR_NONE) {
+        printf("[dtp-server] Failed to bind port 7 (error %d)\n", rc);
+        fflush(stdout);
+        ctx->bind_error = rc;
+        ctx->ready = true;  /* unblock main thread */
         return NULL;
     }
-    csp_listen(&sock, 1);
+    csp_listen(&dtp_server_sock, 1);
+    printf("[dtp-server] Listening on port 7\n");
+    fflush(stdout);
+    ctx->ready = true;  /* signal main thread: ready to accept */
 
     while (!ctx->exit_flag) {
-        csp_conn_t *conn = csp_accept(&sock, 1000);
+        csp_conn_t *conn = csp_accept(&dtp_server_sock, 1000);
         if (!conn) continue;
 
         csp_packet_t *packet = csp_read(conn, 10000);
@@ -309,6 +323,9 @@ static void *dtp_server_thread(void *arg) {
             csp_close(conn);
             continue;
         }
+
+        printf("[dtp-server] Got metadata request from node %d\n", csp_conn_src(conn));
+        fflush(stdout);
 
         packet = setup_server_transfer(&server_transfer_ctx, csp_conn_src(conn), packet);
         server_transfer_ctx.keep_running = true;
@@ -318,6 +335,8 @@ static void *dtp_server_thread(void *arg) {
              * before we start blasting data packets */
             usleep(200000);  /* 200ms */
             start_sending_data(&server_transfer_ctx);
+            printf("[dtp-server] Data sent, holding connection...\n");
+            fflush(stdout);
         }
         server_transfer_ctx.keep_running = false;
 
@@ -325,9 +344,11 @@ static void *dtp_server_thread(void *arg) {
          * with the metadata response on small transfers */
         usleep(500000);  /* 500ms */
         csp_close(conn);
+        printf("[dtp-server] Transfer complete\n");
+        fflush(stdout);
     }
 
-    csp_socket_close(&sock);
+    csp_socket_close(&dtp_server_sock);
     return NULL;
 }
 
@@ -441,10 +462,22 @@ static int deploy_single_app(unsigned int node, char *app_name,
     }
 
     /* Step 2: Start DTP server in background thread */
-    dtp_server_ctx_t dtp_ctx = { .exit_flag = false };
+    dtp_server_ctx_t dtp_ctx = { .exit_flag = false, .ready = false, .bind_error = 0 };
     pthread_t dtp_thread;
     if (pthread_create(&dtp_thread, NULL, dtp_server_thread, &dtp_ctx) != 0) {
         printf("Error: Failed to start DTP server thread\n");
+        dtp_file_payload_del(payload_id);
+        return SLASH_EIO;
+    }
+
+    /* Wait for server to bind port 7 before sending deploy request */
+    for (int i = 0; i < 50 && !dtp_ctx.ready; i++) {
+        usleep(20000);  /* 20ms, max 1s total */
+    }
+    if (dtp_ctx.bind_error || !dtp_ctx.ready) {
+        printf("Error: DTP server failed to start (bind_error=%d)\n", dtp_ctx.bind_error);
+        dtp_ctx.exit_flag = true;
+        pthread_join(dtp_thread, NULL);
         dtp_file_payload_del(payload_id);
         return SLASH_EIO;
     }
