@@ -120,12 +120,12 @@ int backup_list(const char *app_name, backup_list_callback callback, void *user_
  * @param expected_size Expected file size (0 to skip size check).
  * @param mtu Max transmission unit (0 = use default 1024).
  * @param throughput Target throughput in bytes/s (0 = use default 10 MB/s).
- * @param timeout Transfer timeout in seconds (0 = use default 60).
+ * @param timeout Transfer timeout in seconds (0 = use default 60, max 255).
  * @return 0 on success, -1 on failure.
  */
-int dtp_download_file(uint32_t server_node, uint16_t payload_id,
+int dtp_download_file(uint32_t server_node, uint8_t payload_id,
                       const char *dest_path, uint32_t expected_size,
-                      uint32_t mtu, uint32_t throughput, uint32_t timeout);
+                      uint16_t mtu, uint32_t throughput, uint8_t timeout);
 
 /**
  * Save app deployment metadata.

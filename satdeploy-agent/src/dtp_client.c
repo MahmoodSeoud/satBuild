@@ -98,9 +98,9 @@ static void on_download_release(dtp_t *session) {
     /* Nothing to clean up - context is on stack */
 }
 
-int dtp_download_file(uint32_t server_node, uint16_t payload_id,
+int dtp_download_file(uint32_t server_node, uint8_t payload_id,
                       const char *dest_path, uint32_t expected_size,
-                      uint32_t mtu, uint32_t throughput, uint32_t timeout) {
+                      uint16_t mtu, uint32_t throughput, uint8_t timeout) {
     if (dest_path == NULL) {
         return -1;
     }
