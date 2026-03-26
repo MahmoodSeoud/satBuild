@@ -278,7 +278,15 @@ static int satdeploy_status_cmd(struct slash *slash)
  * to use the file-based payload registry.
  */
 bool get_payload_meta(dtp_payload_meta_t *meta, uint8_t payload_id) {
-    return dtp_file_payload_get_meta(meta, payload_id);
+    printf("[dtp-server] get_payload_meta(id=%u)\n", payload_id);
+    fflush(stdout);
+    dtp_file_payload_info();  /* print registered payloads */
+    fflush(stdout);
+    bool result = dtp_file_payload_get_meta(meta, payload_id);
+    printf("[dtp-server] payload lookup: %s (size=%u)\n", result ? "OK" : "NOT FOUND",
+           result ? (unsigned)meta->size : 0);
+    fflush(stdout);
+    return result;
 }
 
 /* DTP server thread — custom loop that holds the RDP connection open
@@ -456,10 +464,15 @@ static int deploy_single_app(unsigned int node, char *app_name,
 
     /* Step 1: Register the file as a DTP payload */
     uint8_t payload_id = next_payload_id++;
+    printf("[dtp] Registering payload id=%u file=%s\n", payload_id, local_path);
+    fflush(stdout);
     if (!dtp_file_payload_add(payload_id, local_path)) {
         printf("Error: Failed to register file as DTP payload\n");
         return SLASH_EIO;
     }
+    printf("[dtp] Payload registered. Current payloads:\n");
+    dtp_file_payload_info();
+    fflush(stdout);
 
     /* Step 2: Start DTP server in background thread */
     dtp_server_ctx_t dtp_ctx = { .exit_flag = false, .ready = false, .bind_error = 0 };
