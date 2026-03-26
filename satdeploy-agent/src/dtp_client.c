@@ -13,6 +13,8 @@
 
 #include <csp/csp.h>
 #include <dtp/dtp.h>
+#include <dtp/dtp_session.h>
+#include <dtp/dtp_protocol.h>
 
 #include "satdeploy_agent.h"
 
@@ -150,15 +152,18 @@ int dtp_download_file(uint32_t server_node, uint8_t payload_id,
         return -1;
     }
 
-    /* Debug: verify params passed to session */
+    /* Debug: dump raw request_meta bytes */
     {
-        dtp_params check;
-        dtp_get_opt(session, DTP_PAYLOAD_ID_CFG, &check);
-        printf("[dtp-debug] payload_id=%u (expected %u)\n", check.payload_id.value, payload_id);
-        dtp_get_opt(session, DTP_MTU_CFG, &check);
-        printf("[dtp-debug] mtu=%u\n", check.mtu.value);
-        dtp_get_opt(session, DTP_THROUGHPUT_CFG, &check);
-        printf("[dtp-debug] throughput=%u\n", check.throughput.value);
+        printf("[dtp-debug] sizeof(dtp_meta_req_t)=%zu\n", sizeof(dtp_meta_req_t));
+        uint8_t *raw = (uint8_t *)&session->request_meta;
+        printf("[dtp-debug] request_meta raw:");
+        for (int i = 0; i < 16; i++) printf(" %02x", raw[i]);
+        printf("\n");
+        printf("[dtp-debug] throughput=%u nof_intervals=%u payload_id=%u mtu=%u\n",
+               session->request_meta.throughput,
+               session->request_meta.nof_intervals,
+               session->request_meta.payload_id,
+               session->request_meta.mtu);
         fflush(stdout);
     }
 
