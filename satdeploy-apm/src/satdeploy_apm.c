@@ -277,9 +277,8 @@ static int satdeploy_status_cmd(struct slash *slash)
  * to use the file-based payload registry.
  */
 bool get_payload_meta(dtp_payload_meta_t *meta, uint8_t payload_id) {
-    printf("[dtp-server] get_payload_meta(id=%u)\n", payload_id);
-    fflush(stdout);
-    dtp_file_payload_info();  /* print registered payloads */
+    printf("[dtp-server] sizeof(dtp_meta_req_t)=%zu  get_payload_meta(id=%u)\n",
+           sizeof(dtp_meta_req_t), payload_id);
     fflush(stdout);
     bool result = dtp_file_payload_get_meta(meta, payload_id);
     printf("[dtp-server] payload lookup: %s (size=%u)\n", result ? "OK" : "NOT FOUND",
