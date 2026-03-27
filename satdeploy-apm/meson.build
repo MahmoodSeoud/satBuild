@@ -15,14 +15,12 @@ project('satdeploy-apm', 'c', subproject_dir: 'lib', version: '0.1.0', default_o
 
 includes = include_directories('src')
 apm_csh_dep = dependency('apm_csh', fallback: ['apm_csh', 'apm_csh_dep'], required: true)
-# CSP: headers only — CSP functions come from CSH at runtime
-csp_dep = dependency('csp', fallback: ['csp', 'csp_dep'], required: true).partial_dependency(includes: true, compile_args: true)
+csp_dep = dependency('csp', fallback: ['csp', 'csp_dep'], required: true)
 slash_dep = dependency('slash', fallback: ['slash', 'slash_dep'], required: false).partial_dependency(links: false, includes: true)
 param_dep = dependency('param', fallback: ['param', 'param_dep']).as_link_whole()
 proto_c_dep = dependency('libprotobuf-c', fallback: ['protobuf-c', 'libprotobuf_c_dep'])
 yaml_dep = dependency('yaml-0.1', fallback: ['libyaml', 'yaml_dep'], required: true)
 sqlite3_dep = dependency('sqlite3', fallback: ['sqlite3', 'sqlite3_dep'], required: true)
-# DTP: full link — exclude from dynamic symbol table so CSH's DTP doesn't shadow ours
 dtp_dep = dependency('dtp', fallback: ['dtp', 'dtp_server_lib_dep'], required: true)
 
 satdeploy_apm = shared_library(
@@ -37,6 +35,5 @@ satdeploy_apm = shared_library(
     ],
     include_directories: includes,
     dependencies: [apm_csh_dep, slash_dep, param_dep, csp_dep, proto_c_dep, yaml_dep, sqlite3_dep, dtp_dep],
-    link_args: ['-Wl,--exclude-libs,ALL'],
     install: true
 )
