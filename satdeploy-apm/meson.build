@@ -19,27 +19,18 @@ apm_csh_dep = dependency('apm_csh', fallback: ['apm_csh', 'apm_csh_dep'], requir
 # Linking the static CSP lib would embed uninitialized CSP globals that shadow CSH's.
 csp_dep = dependency('csp', fallback: ['csp', 'csp_dep'], required: true).partial_dependency(includes: true, compile_args: true)
 slash_dep = dependency('slash', fallback: ['slash', 'slash_dep'], required: false).partial_dependency(links: false, includes: true)
-param_dep = dependency('param', fallback: ['param', 'param_dep']).as_link_whole()
+# Param: headers only — actual param functions come from CSH at runtime.
+# Same rationale as CSP above: linking static libparam embeds uninitialized
+# globals that shadow CSH's initialized copies, causing segfault on dlopen.
+param_dep = dependency('param', fallback: ['param', 'param_dep']).partial_dependency(includes: true, compile_args: true)
 proto_c_dep = dependency('libprotobuf-c', fallback: ['protobuf-c', 'libprotobuf_c_dep'])
 yaml_dep = dependency('yaml-0.1', fallback: ['libyaml', 'yaml_dep'], required: true)
 sqlite3_dep = dependency('sqlite3', fallback: ['sqlite3', 'sqlite3_dep'], required: true)
-# DTP: compile needed source files directly instead of linking libdtp.
-# Linking the full DTP library would pull static copies of libcsp and libparam
-# into this shared library. When CSH dlopen()s us, those duplicate globals
-# (uninitialized) shadow CSH's own initialized copies, causing a segfault.
-# By compiling only the DTP sources we need, their CSP/param references stay
-# unresolved in the .so (b_lundef=false) and resolve at dlopen time against
-# CSH's already-initialized symbols.
-dtp_root = 'lib/dtp'
-dtp_inc = include_directories(dtp_root / 'include', dtp_root / 'src')
-
-dtp_sources = [
-    dtp_root / 'src/dtp_server.c',
-    dtp_root / 'src/dtp_file_payload.c',
-    dtp_root / 'src/dtp_protocol.c',
-    dtp_root / 'src/dtp_os_hal.c',
-    dtp_root / 'src/dtp_log.c',
-]
+# DTP: use as a proper subproject. The DTP subproject's meson.build detects
+# is_subproject() and switches CSP/param to headers-only, so no static copies
+# of those libraries get embedded. Their symbols resolve at dlopen time against
+# CSH's initialized copies.
+dtp_server_dep = dependency('dtp_server', fallback: ['dtp', 'dtp_server_dep'])
 
 satdeploy_apm = shared_library(
     'csh_satdeploy_apm',
@@ -50,9 +41,9 @@ satdeploy_apm = shared_library(
       'src/config.c',
       'src/output.c',
       'src/history.c',
-    ] + dtp_sources,
-    include_directories: [includes, dtp_inc],
-    dependencies: [apm_csh_dep, slash_dep, param_dep, csp_dep, proto_c_dep, yaml_dep, sqlite3_dep],
+    ],
+    include_directories: [includes],
+    dependencies: [apm_csh_dep, slash_dep, param_dep, csp_dep, proto_c_dep, yaml_dep, sqlite3_dep, dtp_server_dep],
     link_args: ['-lm'],
     install: true
 )
