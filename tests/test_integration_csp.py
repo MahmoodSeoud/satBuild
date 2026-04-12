@@ -33,24 +33,103 @@ ZMQ_SUB_PORT = 9601
 BACKUP_DIR = "/opt/satdeploy/backups"
 
 
+def _make_transport(timeout_ms=10000):
+    """Create a fresh connected CSP transport."""
+    t = CSPTransport(
+        zmq_endpoint=f"tcp://{ZMQ_HOST}:{ZMQ_PUB_PORT}",
+        agent_node=AGENT_NODE,
+        ground_node=GROUND_NODE,
+        backup_dir=BACKUP_DIR,
+        timeout_ms=timeout_ms,
+        zmq_pub_port=ZMQ_PUB_PORT,
+        zmq_sub_port=ZMQ_SUB_PORT,
+    )
+    t.connect()
+    return t
+
+
+def _wait_agent_idle(max_attempts=10, interval=0.5):
+    """Poll the agent with STATUS until it responds, proving it's idle."""
+    for _ in range(max_attempts):
+        try:
+            t = _make_transport(timeout_ms=3000)
+            status = t.get_status()
+            t.disconnect()
+            if isinstance(status, dict):
+                return True
+        except Exception:
+            pass
+        time.sleep(interval)
+    return False
+
+
+def _deploy_with_retry(transport_or_factory, app_name, local_path, remote_path,
+                        retries=3, delay=2.0, **kwargs):
+    """Deploy with retry to handle ZMQ subscription race between DTP instances.
+
+    Back-to-back deploys create new ZMQ PUB/SUB sockets each time. The
+    zmqproxy needs time to propagate the new subscription filter — if the
+    agent's DTP request arrives before that, the ground DTP server never
+    sees it and the transfer times out. A retry after a brief pause lets
+    the subscription settle.
+    """
+    for attempt in range(retries):
+        if callable(transport_or_factory):
+            _wait_agent_idle()
+            t = transport_or_factory()
+            result = t.deploy(
+                app_name=app_name, local_path=local_path,
+                remote_path=remote_path, **kwargs,
+            )
+            t.disconnect()
+        else:
+            result = transport_or_factory.deploy(
+                app_name=app_name, local_path=local_path,
+                remote_path=remote_path, **kwargs,
+            )
+
+        if result.success or attempt == retries - 1:
+            return result
+
+        # Wait for ZMQ subscriptions to settle before retrying
+        time.sleep(delay)
+
+    return result
+
+
 def demo_is_running() -> bool:
     """Check if the demo environment is reachable over ZMQ."""
     try:
-        transport = CSPTransport(
-            zmq_endpoint=f"tcp://{ZMQ_HOST}:{ZMQ_PUB_PORT}",
-            agent_node=AGENT_NODE,
-            ground_node=GROUND_NODE,
-            backup_dir=BACKUP_DIR,
-            timeout_ms=3000,
-            zmq_pub_port=ZMQ_PUB_PORT,
-            zmq_sub_port=ZMQ_SUB_PORT,
-        )
-        transport.connect()
-        status = transport.get_status()
-        transport.disconnect()
+        t = _make_transport(timeout_ms=3000)
+        status = t.get_status()
+        t.disconnect()
         return isinstance(status, dict)
     except Exception:
         return False
+
+
+def _restart_agent():
+    """Restart the agent container to get a clean CSP buffer pool.
+
+    After many deploys the agent's CSP buffers can be exhausted
+    (especially for large transfers). A restart gives us a clean slate.
+    """
+    import subprocess as _sp
+    try:
+        result = _sp.run(
+            ["docker", "restart", "satdeploy-agent-1"],
+            capture_output=True, text=True, timeout=15,
+        )
+        if result.returncode != 0:
+            # Try alternate container name
+            _sp.run(
+                ["docker", "compose", "restart", "agent"],
+                capture_output=True, text=True, timeout=15,
+            )
+        # Wait for agent to come back
+        _wait_agent_idle(max_attempts=20, interval=1.0)
+    except Exception:
+        pass
 
 
 # Skip all tests if demo isn't running
@@ -63,19 +142,21 @@ pytestmark = [
 ]
 
 
+@pytest.fixture(scope="module", autouse=True)
+def _fresh_agent():
+    """Restart the agent once at the start of the module for a clean state."""
+    _restart_agent()
+
+
 @pytest.fixture
 def transport():
-    """Create a connected CSP transport to the live demo."""
-    t = CSPTransport(
-        zmq_endpoint=f"tcp://{ZMQ_HOST}:{ZMQ_PUB_PORT}",
-        agent_node=AGENT_NODE,
-        ground_node=GROUND_NODE,
-        backup_dir=BACKUP_DIR,
-        timeout_ms=10000,
-        zmq_pub_port=ZMQ_PUB_PORT,
-        zmq_sub_port=ZMQ_SUB_PORT,
-    )
-    t.connect()
+    """Create a connected CSP transport to the live demo.
+
+    Waits for the agent to be idle first, so back-to-back deploys
+    from prior tests don't cause DTP congestion failures.
+    """
+    _wait_agent_idle()
+    t = _make_transport()
     yield t
     t.disconnect()
 
@@ -205,10 +286,8 @@ class TestCSPDeploy:
 
     def test_deploy_new_file(self, transport, test_binary):
         """Deploying a new binary should succeed and return a hash."""
-        result = transport.deploy(
-            app_name="test_app",
-            local_path=test_binary,
-            remote_path="/opt/demo/bin/test_app",
+        result = _deploy_with_retry(
+            transport, "test_app", test_binary, "/opt/demo/bin/test_app",
         )
         assert result.success, f"Deploy failed: {result.error_message}"
         assert result.file_hash, "Deploy should return a file hash"
@@ -216,10 +295,8 @@ class TestCSPDeploy:
 
     def test_deploy_changes_status_hash(self, transport, test_binary):
         """After deploy, status should show the new file hash."""
-        result = transport.deploy(
-            app_name="test_app",
-            local_path=test_binary,
-            remote_path="/opt/demo/bin/test_app",
+        result = _deploy_with_retry(
+            transport, "test_app", test_binary, "/opt/demo/bin/test_app",
         )
         assert result.success
 
@@ -233,10 +310,8 @@ class TestCSPDeploy:
         status_before = transport.get_status()
         old_hash = status_before["test_app"].file_hash
 
-        result = transport.deploy(
-            app_name="test_app",
-            local_path=test_binary,
-            remote_path="/opt/demo/bin/test_app",
+        result = _deploy_with_retry(
+            transport, "test_app", test_binary, "/opt/demo/bin/test_app",
         )
         assert result.success
         assert result.backup_path, "Deploy should report a backup path"
@@ -251,10 +326,8 @@ class TestCSPDeploy:
     def test_deploy_nonexistent_app_creates_it(self, transport, test_binary):
         """Deploying to a new app name should work (agent creates it)."""
         unique_name = f"inttest_{int(time.time())}"
-        result = transport.deploy(
-            app_name=unique_name,
-            local_path=test_binary,
-            remote_path=f"/opt/demo/bin/{unique_name}",
+        result = _deploy_with_retry(
+            transport, unique_name, test_binary, f"/opt/demo/bin/{unique_name}",
         )
         assert result.success, f"Deploy to new app failed: {result.error_message}"
 
@@ -298,66 +371,46 @@ class TestCSPRollback:
     issues from accumulated ZMQ state when running the full test suite.
     """
 
-    @staticmethod
-    def _fresh_transport():
-        t = CSPTransport(
-            zmq_endpoint=f"tcp://{ZMQ_HOST}:{ZMQ_PUB_PORT}",
-            agent_node=AGENT_NODE,
-            ground_node=GROUND_NODE,
-            backup_dir=BACKUP_DIR,
-            timeout_ms=10000,
-            zmq_pub_port=ZMQ_PUB_PORT,
-            zmq_sub_port=ZMQ_SUB_PORT,
-        )
-        t.connect()
-        return t
-
     def test_rollback_to_previous(self, test_binary):
         """Rollback should restore the previous version."""
         # Deploy a known file first
-        t = self._fresh_transport()
-        deploy_result = t.deploy(
-            app_name="test_app",
-            local_path=test_binary,
-            remote_path="/opt/demo/bin/test_app",
+        _wait_agent_idle()
+        deploy_result = _deploy_with_retry(
+            _make_transport, "test_app", test_binary, "/opt/demo/bin/test_app",
         )
-        t.disconnect()
         assert deploy_result.success
 
         new_hash = deploy_result.file_hash
 
         # Now rollback
-        t = self._fresh_transport()
+        t = _make_transport()
         rollback_result = t.rollback(app_name="test_app")
         t.disconnect()
         assert rollback_result.success, f"Rollback failed: {rollback_result.error_message}"
 
         # Status should show a different hash
-        t = self._fresh_transport()
+        t = _make_transport()
         status = t.get_status()
         t.disconnect()
         assert status["test_app"].file_hash != new_hash, "Hash should change after rollback"
 
     def test_rollback_to_specific_hash(self, test_binary):
         """Rollback to a specific backup hash should restore that version."""
+        _wait_agent_idle()
         # Get current state
-        t = self._fresh_transport()
+        t = _make_transport()
         status_before = t.get_status()
         original_hash = status_before["test_app"].file_hash
         t.disconnect()
 
         # Deploy something new
-        t = self._fresh_transport()
-        deploy_result = t.deploy(
-            app_name="test_app",
-            local_path=test_binary,
-            remote_path="/opt/demo/bin/test_app",
+        deploy_result = _deploy_with_retry(
+            _make_transport, "test_app", test_binary, "/opt/demo/bin/test_app",
         )
-        t.disconnect()
         assert deploy_result.success
 
         # Rollback to the original hash
-        t = self._fresh_transport()
+        t = _make_transport()
         rollback_result = t.rollback(
             app_name="test_app",
             backup_hash=original_hash,
@@ -366,7 +419,7 @@ class TestCSPRollback:
         assert rollback_result.success
 
         # Verify it's back
-        t = self._fresh_transport()
+        t = _make_transport()
         status_after = t.get_status()
         t.disconnect()
         assert status_after["test_app"].file_hash == original_hash
@@ -386,10 +439,8 @@ class TestDTPTransfer:
             path = f.name
 
         try:
-            result = transport.deploy(
-                app_name="test_app",
-                local_path=path,
-                remote_path="/opt/demo/bin/test_app",
+            result = _deploy_with_retry(
+                transport, "test_app", path, "/opt/demo/bin/test_app",
             )
             assert result.success
         finally:
@@ -403,10 +454,8 @@ class TestDTPTransfer:
             path = f.name
 
         try:
-            result = transport.deploy(
-                app_name="test_app",
-                local_path=path,
-                remote_path="/opt/demo/bin/test_app",
+            result = _deploy_with_retry(
+                transport, "test_app", path, "/opt/demo/bin/test_app",
             )
             assert result.success
         finally:
@@ -420,23 +469,10 @@ class TestDTPTransfer:
             path = f.name
 
         try:
-            # Fresh transport to avoid DTP congestion from prior tests
-            t = CSPTransport(
-                zmq_endpoint=f"tcp://{ZMQ_HOST}:{ZMQ_PUB_PORT}",
-                agent_node=AGENT_NODE,
-                ground_node=GROUND_NODE,
-                backup_dir=BACKUP_DIR,
-                timeout_ms=15000,
-                zmq_pub_port=ZMQ_PUB_PORT,
-                zmq_sub_port=ZMQ_SUB_PORT,
+            result = _deploy_with_retry(
+                lambda: _make_transport(timeout_ms=15000),
+                "test_app", path, "/opt/demo/bin/test_app",
             )
-            t.connect()
-            result = t.deploy(
-                app_name="test_app",
-                local_path=path,
-                remote_path="/opt/demo/bin/test_app",
-            )
-            t.disconnect()
             assert result.success, f"Large file deploy failed: {result.error_message}"
         finally:
             os.unlink(path)
@@ -446,10 +482,8 @@ class TestDTPTransfer:
         from satdeploy.hash import compute_file_hash
 
         expected_hash = compute_file_hash(test_binary)[:8]
-        result = transport.deploy(
-            app_name="test_app",
-            local_path=test_binary,
-            remote_path="/opt/demo/bin/test_app",
+        result = _deploy_with_retry(
+            transport, "test_app", test_binary, "/opt/demo/bin/test_app",
         )
         assert result.success
         assert result.file_hash == expected_hash, (
@@ -468,25 +502,12 @@ class TestCLIPushProvenanceSources:
     provenance tags propagate through the full stack.
     """
 
-    @staticmethod
-    def _fresh_transport():
-        t = CSPTransport(
-            zmq_endpoint=f"tcp://{ZMQ_HOST}:{ZMQ_PUB_PORT}",
-            agent_node=AGENT_NODE,
-            ground_node=GROUND_NODE,
-            backup_dir=BACKUP_DIR,
-            timeout_ms=10000,
-            zmq_pub_port=ZMQ_PUB_PORT,
-            zmq_sub_port=ZMQ_SUB_PORT,
-        )
-        t.connect()
-        return t
-
     def test_push_from_git_repo(self):
         """Push a file tracked in the git repo — should tag with branch@hash."""
         from click.testing import CliRunner
         from satdeploy.cli import main
 
+        _wait_agent_idle()
         runner = CliRunner()
 
         # Use a file inside this git repo (the demo binary is generated from
@@ -502,7 +523,7 @@ class TestCLIPushProvenanceSources:
         result = runner.invoke(
             main,
             ["push", "test_app", "--local", "pyproject.toml",
-             "--config", os.path.expanduser("~/.satdeploy-demo/config.yaml")],
+             "--config", os.path.expanduser("~/.satdeploy/demo/config.yaml")],
         )
 
         assert result.exit_code == 0, f"Push failed: {result.output}"
@@ -520,10 +541,8 @@ class TestCLIPushProvenanceSources:
         from click.testing import CliRunner
         from satdeploy.cli import main
 
+        _wait_agent_idle()
         runner = CliRunner()
-
-        # Brief pause to let agent settle after prior deploys
-        time.sleep(0.5)
 
         # Create a temp file outside any git repo
         with tempfile.NamedTemporaryFile(delete=False, suffix=".bin", dir="/tmp") as f:
@@ -541,7 +560,7 @@ class TestCLIPushProvenanceSources:
             result = runner.invoke(
                 main,
                 ["push", "test_app", "--local", tmp_path,
-                 "--config", os.path.expanduser("~/.satdeploy-demo/config.yaml")],
+                 "--config", os.path.expanduser("~/.satdeploy/demo/config.yaml")],
                 env=env,
             )
 
@@ -558,6 +577,7 @@ class TestCLIPushProvenanceSources:
         from click.testing import CliRunner
         from satdeploy.cli import main
 
+        _wait_agent_idle()
         runner = CliRunner()
 
         # Create file in /tmp (outside any git repo), with no CI env vars
@@ -576,7 +596,7 @@ class TestCLIPushProvenanceSources:
             result = runner.invoke(
                 main,
                 ["push", "test_app", "--local", tmp_path,
-                 "--config", os.path.expanduser("~/.satdeploy-demo/config.yaml")],
+                 "--config", os.path.expanduser("~/.satdeploy/demo/config.yaml")],
                 env=env,
             )
 
@@ -592,8 +612,9 @@ class TestCLIPushProvenanceSources:
         from click.testing import CliRunner
         from satdeploy.cli import main
 
+        _wait_agent_idle()
         runner = CliRunner()
-        config_flag = ["--config", os.path.expanduser("~/.satdeploy-demo/config.yaml")]
+        config_flag = ["--config", os.path.expanduser("~/.satdeploy/demo/config.yaml")]
 
         # 1. Push non-git file
         with tempfile.NamedTemporaryFile(delete=False, suffix=".bin", dir="/tmp") as f:
@@ -614,7 +635,7 @@ class TestCLIPushProvenanceSources:
             assert result.exit_code == 0
 
             # Check status via transport
-            t = self._fresh_transport()
+            t = _make_transport()
             status1 = t.get_status()
             t.disconnect()
             hash_nongit = status1["test_app"].file_hash
@@ -639,7 +660,7 @@ class TestCLIPushProvenanceSources:
             )
             assert result.exit_code == 0
 
-            t = self._fresh_transport()
+            t = _make_transport()
             status2 = t.get_status()
             t.disconnect()
             hash_ci = status2["test_app"].file_hash
@@ -695,21 +716,10 @@ class TestCSPFullRoundTrip:
         Uses a fresh transport per operation to avoid DTP timing issues
         from rapid-fire requests on a single connection.
         """
-        def make_transport():
-            t = CSPTransport(
-                zmq_endpoint=f"tcp://{ZMQ_HOST}:{ZMQ_PUB_PORT}",
-                agent_node=AGENT_NODE,
-                ground_node=GROUND_NODE,
-                backup_dir=BACKUP_DIR,
-                timeout_ms=10000,
-                zmq_pub_port=ZMQ_PUB_PORT,
-                zmq_sub_port=ZMQ_SUB_PORT,
-            )
-            t.connect()
-            return t
+        _wait_agent_idle()
 
         # 1. Record initial state
-        t = make_transport()
+        t = _make_transport()
         status_before = t.get_status()
         assert "test_app" in status_before
         original_hash = status_before["test_app"].file_hash
@@ -723,13 +733,9 @@ class TestCSPFullRoundTrip:
             test_file = f.name
 
         try:
-            t = make_transport()
-            result = t.deploy(
-                app_name="test_app",
-                local_path=test_file,
-                remote_path="/opt/demo/bin/test_app",
+            result = _deploy_with_retry(
+                _make_transport, "test_app", test_file, "/opt/demo/bin/test_app",
             )
-            t.disconnect()
             assert result.success, f"Deploy failed: {result.error_message}"
             new_hash = result.file_hash
             assert new_hash != original_hash, "New file should have different hash"
@@ -737,7 +743,7 @@ class TestCSPFullRoundTrip:
             os.unlink(test_file)
 
         # 3. Verify status reflects the deploy
-        t = make_transport()
+        t = _make_transport()
         status_after = t.get_status()
         assert status_after["test_app"].file_hash == new_hash
 
@@ -750,7 +756,7 @@ class TestCSPFullRoundTrip:
         )
 
         # 5. Rollback to original
-        t = make_transport()
+        t = _make_transport()
         rollback_result = t.rollback(
             app_name="test_app",
             backup_hash=original_hash,
@@ -759,7 +765,7 @@ class TestCSPFullRoundTrip:
         assert rollback_result.success
 
         # 6. Verify status is back to original
-        t = make_transport()
+        t = _make_transport()
         status_final = t.get_status()
         t.disconnect()
         assert status_final["test_app"].file_hash == original_hash
