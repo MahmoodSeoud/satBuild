@@ -19,7 +19,7 @@ from satdeploy.transport.csp import CSPTransport
 from satdeploy.transport.base import TransportError
 
 
-DEMO_CONFIG_PATH = Path.home() / ".satdeploy" / "config.yaml"
+DEMO_CONFIG_PATH = Path.home() / ".satdeploy" / "demo" / "config.yaml"
 DEMO_DIR = Path.home() / ".satdeploy" / "demo"
 GHCR_IMAGE = "ghcr.io/mahmoodseoud/satdeploy-sim:latest"
 
@@ -76,11 +76,10 @@ TUTORIAL_TEXT = """\
 
   {line} Try these commands {line2}
 
-    satdeploy status                  See what's deployed
-    satdeploy push test_app           Deploy a new version
-    satdeploy list test_app           See version history
-    satdeploy rollback test_app       Roll back to previous
-    satdeploy logs test_app           View service logs
+    satdeploy --config {cfg} status                  See what's deployed
+    satdeploy --config {cfg} push test_app           Deploy a new version
+    satdeploy --config {cfg} list test_app           See version history
+    satdeploy --config {cfg} rollback test_app       Roll back to previous
 
   {line} Explore the satellite {line3}
 
@@ -263,7 +262,9 @@ def _wait_for_agent(max_attempts: int = 15, interval: float = 2.0) -> bool:
 def _print_tutorial() -> None:
     """Print the guided tutorial output."""
     line = "\u2500" * 3
+    cfg = str(DEMO_CONFIG_PATH)
     click.echo(TUTORIAL_TEXT.format(
+        cfg=cfg,
         line=line,
         line2="\u2500" * 33,
         line3="\u2500" * 30,
@@ -433,14 +434,9 @@ def demo_stop(clean: bool = False) -> None:
         click.echo("Demo environment is not running.")
 
     if clean:
+        # DEMO_CONFIG_PATH is inside DEMO_DIR, so removing DEMO_DIR cleans both
         if DEMO_DIR.exists():
             shutil.rmtree(DEMO_DIR)
-        if DEMO_CONFIG_PATH.exists():
-            DEMO_CONFIG_PATH.unlink()
-        # Clean up demo history too
-        history_path = DEMO_CONFIG_PATH.parent / ".demo-history.db"
-        if history_path.exists():
-            history_path.unlink()
         click.echo(success("Removed demo files"))
     elif DEMO_CONFIG_PATH.exists():
         # Always clean up demo config so next `demo start` re-initializes

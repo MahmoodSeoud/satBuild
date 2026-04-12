@@ -286,6 +286,26 @@ def config_option(f):
     )(f)
 
 
+def load_config(config_path: Path | None) -> Config:
+    """Load and validate config, raising SatDeployError on problems."""
+    config = Config(config_path=config_path)
+
+    if config.load() is None:
+        raise SatDeployError(
+            f"Config not found at {config.config_path}. "
+            "Run 'satdeploy init' first."
+        )
+
+    errors = config.validate(config._data)
+    if errors:
+        raise SatDeployError(
+            f"Invalid config at {config.config_path}: "
+            f"missing fields: {', '.join(errors)}"
+        )
+
+    return config
+
+
 def node_option(f):
     """Shared -n/--node option for targeting a specific CSP node."""
     return click.option(
@@ -477,6 +497,15 @@ def init(config_path: Path | None):
         }
 
     config.save(data)
+
+    # Sanity-check the generated config
+    errors = config.validate(data)
+    if errors:
+        click.echo("")
+        click.echo(warning(f"Config saved but has issues: {', '.join(errors)}"))
+        click.echo(f"  Fix them in {config.config_path}")
+        return
+
     click.echo("")
     click.echo(success(f"Config saved to {config.config_path}"))
     click.echo(f"  Edit local and remote paths in {config.config_path}")
@@ -547,12 +576,7 @@ def push(
 
     APPS are the names of the applications to deploy.
     """
-    config = Config(config_path=config_path)
-
-    if config.load() is None:
-        raise SatDeployError(
-            f"Config not found at {config.config_path}. Run 'satdeploy init' first."
-        )
+    config = load_config(config_path)
 
     # Validate flag combinations
     if remote_override and not local:
@@ -855,12 +879,7 @@ def push(
 @node_option
 def status(config_path: Path | None, node_override: int | None):
     """Show status of deployed apps and services."""
-    config = Config(config_path=config_path)
-
-    if config.load() is None:
-        raise SatDeployError(
-            f"Config not found at {config.config_path}. Run 'satdeploy init' first."
-        )
+    config = load_config(config_path)
 
     module_config = config.get_target()
     if node_override:
@@ -1056,12 +1075,7 @@ def list_backups(app: str, config_path: Path | None, node_override: int | None):
     Shows the currently deployed version at the top, followed by
     all available backups that can be restored via rollback.
     """
-    config = Config(config_path=config_path)
-
-    if config.load() is None:
-        raise SatDeployError(
-            f"Config not found at {config.config_path}. Run 'satdeploy init' first."
-        )
+    config = load_config(config_path)
 
     module_config = config.get_target()
     if node_override:
@@ -1242,12 +1256,7 @@ def rollback(app: str, hash: str | None, hash_option: str | None, config_path: P
     HASH is the optional backup hash to restore (defaults to previous version).
     """
     target_hash = hash_option or hash  # -H flag takes precedence over positional
-    config = Config(config_path=config_path)
-
-    if config.load() is None:
-        raise SatDeployError(
-            f"Config not found at {config.config_path}. Run 'satdeploy init' first."
-        )
+    config = load_config(config_path)
 
     module_config = config.get_target()
     if node_override:
@@ -1440,12 +1449,7 @@ def rollback(app: str, hash: str | None, hash_option: str | None, config_path: P
 @config_option
 def config(config_path: Path | None):
     """Show current configuration."""
-    cfg = Config(config_path=config_path)
-
-    if cfg.load() is None:
-        raise SatDeployError(
-            f"Config not found at {cfg.config_path}. Run 'satdeploy init' first."
-        )
+    cfg = load_config(config_path)
 
     click.echo(f"Config file: {cfg.config_path}")
 
@@ -1501,12 +1505,7 @@ def logs(app: str, lines: int, config_path: Path | None, node_override: int | No
 
     APP is the name of the application to show logs for.
     """
-    config = Config(config_path=config_path)
-
-    if config.load() is None:
-        raise SatDeployError(
-            f"Config not found at {config.config_path}. Run 'satdeploy init' first."
-        )
+    config = load_config(config_path)
 
     module_config = config.get_target()
     if node_override:

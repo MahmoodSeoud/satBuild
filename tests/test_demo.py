@@ -197,9 +197,10 @@ class TestDemoStop:
         with patch("satdeploy.demo._get_compose_file", return_value=repo_compose):
             with patch("satdeploy.demo._find_repo_compose", return_value=repo_compose):
                 with patch("satdeploy.demo.DEMO_DIR", Path("/tmp/nonexistent")):
-                    demo_stop()
-                    output = capsys.readouterr().out
-                    assert "leaving containers running" in output.lower()
+                    with patch("satdeploy.demo.DEMO_CONFIG_PATH", Path("/tmp/nonexistent/config.yaml")):
+                        demo_stop()
+                        output = capsys.readouterr().out
+                        assert "leaving containers running" in output.lower()
 
     def test_stop_clean(self, tmp_path):
         with patch("satdeploy.demo._get_compose_file", return_value=tmp_path / "dc.yml"):
