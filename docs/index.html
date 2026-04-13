@@ -1,0 +1,533 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>satdeploy -- OTA deployment for embedded Linux satellites</title>
+  <style>
+    *, *::before, *::after {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    :root {
+      --bg: #0a0e17;
+      --bg-raised: #111827;
+      --bg-terminal: #0d1117;
+      --border: #1e293b;
+      --text: #e2e8f0;
+      --text-muted: #94a3b8;
+      --text-dim: #64748b;
+      --accent: #60a5fa;
+      --accent-dim: #2563eb;
+      --green: #4ade80;
+      --yellow: #facc15;
+      --red: #f87171;
+      --max-width: 720px;
+    }
+
+    html {
+      font-size: 16px;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      line-height: 1.7;
+    }
+
+    /* ---- Layout ---- */
+    .container {
+      max-width: var(--max-width);
+      margin: 0 auto;
+      padding: 0 1.5rem;
+    }
+
+    section {
+      padding: 5rem 0;
+    }
+
+    section + section {
+      border-top: 1px solid var(--border);
+    }
+
+    /* ---- Hero ---- */
+    .hero {
+      padding: 6rem 0 5rem;
+      text-align: center;
+    }
+
+    .hero-badge {
+      display: inline-block;
+      font-size: 0.75rem;
+      font-weight: 600;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--accent);
+      border: 1px solid var(--accent-dim);
+      border-radius: 9999px;
+      padding: 0.25rem 1rem;
+      margin-bottom: 2rem;
+    }
+
+    .hero blockquote {
+      font-size: clamp(1.5rem, 4vw, 2.25rem);
+      font-weight: 700;
+      line-height: 1.3;
+      color: var(--text);
+      max-width: 600px;
+      margin: 0 auto 1.5rem;
+      border: none;
+      padding: 0;
+    }
+
+    .hero blockquote::before {
+      content: "\201C";
+      color: var(--accent-dim);
+    }
+
+    .hero blockquote::after {
+      content: "\201D";
+      color: var(--accent-dim);
+    }
+
+    .hero .subtitle {
+      font-size: 1.125rem;
+      color: var(--text-muted);
+      max-width: 520px;
+      margin: 0 auto;
+    }
+
+    /* ---- What it does ---- */
+    .what h2,
+    .try h2,
+    .transport h2 {
+      font-size: 1.5rem;
+      font-weight: 700;
+      margin-bottom: 2rem;
+    }
+
+    .what ul {
+      list-style: none;
+      padding: 0;
+    }
+
+    .what li {
+      position: relative;
+      padding-left: 1.5rem;
+      margin-bottom: 1rem;
+      color: var(--text-muted);
+    }
+
+    .what li::before {
+      content: "--";
+      position: absolute;
+      left: 0;
+      color: var(--accent);
+      font-weight: 700;
+      font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+    }
+
+    .what li strong {
+      color: var(--text);
+      font-weight: 600;
+    }
+
+    /* ---- Try it now ---- */
+    .install-block {
+      background: var(--bg-terminal);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 1.25rem 1.5rem;
+      margin-bottom: 2rem;
+      overflow-x: auto;
+    }
+
+    .install-block code {
+      font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+      font-size: 0.9rem;
+      line-height: 1.8;
+      color: var(--text);
+    }
+
+    .install-block .prompt {
+      color: var(--text-dim);
+      user-select: none;
+    }
+
+    .install-block .comment {
+      color: var(--text-dim);
+    }
+
+    .try .note {
+      font-size: 0.875rem;
+      color: var(--text-dim);
+      margin-top: -1rem;
+      margin-bottom: 2rem;
+    }
+
+    /* ---- Terminal mockup ---- */
+    .terminal {
+      background: var(--bg-terminal);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      overflow: hidden;
+    }
+
+    .terminal-bar {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 0.75rem 1rem;
+      background: #161b22;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .terminal-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: var(--border);
+    }
+
+    .terminal-bar .title {
+      margin-left: 0.5rem;
+      font-size: 0.75rem;
+      color: var(--text-dim);
+      font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+    }
+
+    .terminal pre {
+      padding: 1.25rem 1.5rem;
+      overflow-x: auto;
+      font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+      font-size: 0.8rem;
+      line-height: 1.7;
+      color: var(--text-muted);
+    }
+
+    .terminal .cmd {
+      color: var(--text);
+      font-weight: 600;
+    }
+
+    .terminal .prompt {
+      color: var(--green);
+    }
+
+    .terminal .step {
+      color: var(--accent);
+    }
+
+    .terminal .result {
+      color: var(--green);
+    }
+
+    .terminal .label-running {
+      color: var(--green);
+    }
+
+    .terminal .label-deployed {
+      color: var(--text-dim);
+    }
+
+    .terminal .hash {
+      color: var(--yellow);
+    }
+
+    .terminal .dim {
+      color: var(--text-dim);
+    }
+
+    /* ---- Video placeholder ---- */
+    .video-placeholder {
+      margin-top: 2.5rem;
+      border: 1px dashed var(--border);
+      border-radius: 8px;
+      padding: 3rem 1.5rem;
+      text-align: center;
+      color: var(--text-dim);
+      font-size: 0.875rem;
+    }
+
+    /* ---- Transport ---- */
+    .transport-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1.5rem;
+      margin-top: 1.5rem;
+    }
+
+    @media (max-width: 540px) {
+      .transport-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    .transport-card {
+      background: var(--bg-raised);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 1.5rem;
+    }
+
+    .transport-card h3 {
+      font-size: 1rem;
+      font-weight: 700;
+      margin-bottom: 0.5rem;
+    }
+
+    .transport-card p {
+      font-size: 0.9rem;
+      color: var(--text-muted);
+      line-height: 1.6;
+    }
+
+    .transport-card .tag {
+      display: inline-block;
+      font-size: 0.7rem;
+      font-weight: 600;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+      color: var(--accent);
+      background: rgba(96, 165, 250, 0.1);
+      border-radius: 4px;
+      padding: 0.15rem 0.5rem;
+      margin-bottom: 0.75rem;
+    }
+
+    .transport-diagram {
+      margin-top: 2rem;
+      background: var(--bg-terminal);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 1.25rem 1.5rem;
+      overflow-x: auto;
+    }
+
+    .transport-diagram pre {
+      font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+      font-size: 0.8rem;
+      line-height: 1.7;
+      color: var(--text-muted);
+    }
+
+    /* ---- CTA / Footer ---- */
+    .cta {
+      text-align: center;
+      padding: 5rem 0;
+    }
+
+    .cta h2 {
+      font-size: 1.5rem;
+      font-weight: 700;
+      margin-bottom: 0.75rem;
+    }
+
+    .cta p {
+      color: var(--text-muted);
+      margin-bottom: 2rem;
+      max-width: 440px;
+      margin-left: auto;
+      margin-right: auto;
+    }
+
+    .btn {
+      display: inline-block;
+      font-size: 0.9rem;
+      font-weight: 600;
+      text-decoration: none;
+      padding: 0.75rem 2rem;
+      border-radius: 6px;
+      transition: background 0.15s, border-color 0.15s;
+    }
+
+    .btn-primary {
+      background: var(--accent);
+      color: var(--bg);
+    }
+
+    .btn-primary:hover {
+      background: #93c5fd;
+    }
+
+    .btn-secondary {
+      background: transparent;
+      color: var(--text);
+      border: 1px solid var(--border);
+      margin-left: 0.75rem;
+    }
+
+    .btn-secondary:hover {
+      border-color: var(--text-dim);
+    }
+
+    @media (max-width: 480px) {
+      .btn-secondary {
+        margin-left: 0;
+        margin-top: 0.75rem;
+      }
+      .cta .btn {
+        display: block;
+        text-align: center;
+      }
+    }
+
+    footer {
+      border-top: 1px solid var(--border);
+      padding: 2rem 0;
+      text-align: center;
+      font-size: 0.8rem;
+      color: var(--text-dim);
+    }
+
+    footer a {
+      color: var(--text-muted);
+      text-decoration: none;
+    }
+
+    footer a:hover {
+      color: var(--text);
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Hero -->
+  <section class="hero">
+    <div class="container">
+      <div class="hero-badge">Open Source</div>
+      <blockquote>We shipped a satellite without being sure what software was on it.</blockquote>
+      <p class="subtitle">
+        satdeploy is OTA deployment for embedded Linux satellites.
+        Push files over SSH or CubeSat Space Protocol, track every version, rollback with one command.
+      </p>
+    </div>
+  </section>
+
+  <!-- What it does -->
+  <section class="what">
+    <div class="container">
+      <h2>What satdeploy does</h2>
+      <ul>
+        <li><strong>Versioned deploys with git provenance</strong> -- every push records the content hash and the git commit that built it. You always know what is running and where it came from.</li>
+        <li><strong>One-command rollback</strong> -- restore any previous version instantly. No digging through backup directories or recompiling from a tag.</li>
+        <li><strong>Dependency-aware restarts</strong> -- services stop and start in the right order. Deploy a shared library and its dependents restart automatically.</li>
+        <li><strong>Works over SSH and CSP</strong> -- same workflow whether your target is on the bench via Ethernet or in a thermal-vac chamber on a CAN bus.</li>
+      </ul>
+    </div>
+  </section>
+
+  <!-- Try it now -->
+  <section class="try">
+    <div class="container">
+      <h2>Try it in two commands</h2>
+      <div class="install-block">
+        <code>
+          <span class="prompt">$</span> pipx install satdeploy<br>
+          <span class="prompt">$</span> satdeploy demo start
+          <span class="comment">&nbsp;&nbsp;# starts a simulated satellite via Docker</span>
+        </code>
+      </div>
+      <p class="note">Requires Docker Desktop running. The demo is self-contained -- nothing touches your real hardware.</p>
+
+      <!-- Terminal mockup -->
+      <div class="terminal">
+        <div class="terminal-bar">
+          <span class="terminal-dot"></span>
+          <span class="terminal-dot"></span>
+          <span class="terminal-dot"></span>
+          <span class="title">satdeploy</span>
+        </div>
+        <pre>
+<span class="prompt">$</span> <span class="cmd">satdeploy push controller</span>
+<span class="step">[1/4]</span> Stopping controller.service
+<span class="step">[2/4]</span> Backing up /opt/disco/bin/controller
+<span class="step">[3/4]</span> Uploading ./build/controller
+<span class="step">[4/4]</span> Starting controller.service
+<span class="result">&gt; Deployed controller (e5f6a7b9) main@3c940acf</span>
+
+<span class="prompt">$</span> <span class="cmd">satdeploy status</span>
+<span class="dim">Target: som1 (192.168.1.50)</span>
+
+    APP              STATUS        HASH       SOURCE           TIMESTAMP
+    --------------------------------------------------------------------------
+  &gt; controller      <span class="label-running">running</span>       <span class="hash">e5f6a7b9</span>  main@3c940acf    2024-01-15 14:35
+  &gt; csp_server      <span class="label-running">running</span>       <span class="hash">b7e1d2a4</span>  main@ddfa081f    2024-01-15 09:15
+  - libparam        <span class="label-deployed">deployed</span>      <span class="hash">c4d5e6f1</span>  main@9c622a2b    2024-01-12 16:23
+
+<span class="prompt">$</span> <span class="cmd">satdeploy rollback controller</span>
+<span class="step">[1/3]</span> Stopping controller.service
+<span class="step">[2/3]</span> Restoring a3f2c9b8
+<span class="step">[3/3]</span> Starting controller.service
+<span class="result">&gt; Rolled back controller to a3f2c9b8</span></pre>
+      </div>
+
+      <!-- Demo video placeholder -->
+      <div class="video-placeholder">
+        [DEMO_VIDEO]
+      </div>
+    </div>
+  </section>
+
+  <!-- Built for satellite teams -->
+  <section class="transport">
+    <div class="container">
+      <h2>Built for satellite teams</h2>
+      <p style="color: var(--text-muted); margin-bottom: 1.5rem;">
+        During development your target sits on a bench with Ethernet.
+        During integration it moves behind a CAN bus. satdeploy handles both
+        with the same commands and the same config format.
+      </p>
+
+      <div class="transport-grid">
+        <div class="transport-card">
+          <div class="tag">Networked targets</div>
+          <h3>SSH Transport</h3>
+          <p>
+            Direct SSH/SFTP connection. Works with any Linux target on the network.
+            No agent binary required -- just the Python CLI on your ground station.
+          </p>
+        </div>
+        <div class="transport-card">
+          <div class="tag">Air-gapped targets</div>
+          <h3>CSP Transport</h3>
+          <p>
+            CubeSat Space Protocol over CAN bus or KISS serial.
+            A lightweight C agent runs on the target and handles deploys
+            over the satellite link.
+          </p>
+        </div>
+      </div>
+
+      <div class="transport-diagram">
+        <pre>Bench (SSH):     CLI  ---SSH/SFTP--->  Target
+
+CAN bus (CSP):   CLI  -->  CSH  -->  CAN bus  -->  Agent on target
+
+Serial (CSP):    CLI  -->  CSH  -->  KISS     -->  Agent on target</pre>
+      </div>
+    </div>
+  </section>
+
+  <!-- CTA -->
+  <section class="cta">
+    <div class="container">
+      <h2>Stop guessing what is on your satellite</h2>
+      <p>satdeploy is open source, MIT licensed, and built by a team that needed it.</p>
+      <a href="https://github.com/MahmoodSeoud/satBuild" class="btn btn-primary">View on GitHub</a>
+      <a href="#" class="btn btn-secondary" onclick="document.querySelector('.try').scrollIntoView({behavior:'smooth'});return false;">Try the demo</a>
+    </div>
+  </section>
+
+  <footer>
+    <div class="container">
+      <a href="https://github.com/MahmoodSeoud/satBuild">satdeploy</a> &middot; MIT License
+    </div>
+  </footer>
+
+</body>
+</html>

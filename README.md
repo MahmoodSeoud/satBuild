@@ -7,9 +7,21 @@
 ╚═════╝ ╚═╝  ╚═╝   ╚═╝   ╚═════╝ ╚══════╝╚═╝     ╚══════╝ ╚═════╝    ╚═╝
 ```
 
-OTA deployment for embedded Linux satellites. Push files over SSH or CSP, track versions, rollback with one command.
+**Know exactly what software is running on your satellite.** Push files, track versions, rollback with one command. Works over SSH and CSP (CubeSat Space Protocol).
 
-Deploying software to satellite hardware during development means USB drives, ad-hoc scripts, or hoping SSH works. No versioning, no rollback, no way to know what's running. satdeploy fixes this — works over SSH for networked targets and CSP (CubeSat Space Protocol) over CAN bus for air-gapped ones.
+We shipped a CubeSat without being 100% sure what software was on it. After launch, we spent weeks trying to recreate the state on our flatsat. USB drives, ad-hoc SCP scripts, Slack messages saying "I updated the binary" ... after dozens of incremental updates, nobody could say exactly what was running on the hardware.
+
+So we built satdeploy. Every deploy is versioned, hash-verified, and recorded. Every file can be rolled back with one command. It works over SSH for networked targets and over CSP for air-gapped satellite links (CAN bus, serial).
+
+> **Early stage.** satdeploy works on our hardware. We're looking for other satellite teams to try it and tell us what's missing. [Open an issue](https://github.com/MahmoodSeoud/satBuild/issues) or reach out.
+
+## What it does
+
+- **Push files to your satellite or flatsat** with `satdeploy push`. Tracks what was deployed, when, and from which git commit.
+- **See what's running** with `satdeploy status`. Hash-verified, so you know if something changed outside satdeploy.
+- **Roll back instantly** with `satdeploy rollback`. Every deploy is backed up with its content hash.
+- **Works over SSH and CSP.** SSH for networked targets. CubeSat Space Protocol over CAN bus or serial for air-gapped satellite links.
+- **Complements Yocto.** Yocto builds your base image. satdeploy tracks the incremental updates that happen during development and in orbit.
 
 ## Try it now
 
