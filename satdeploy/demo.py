@@ -73,31 +73,13 @@ DEMO_CONFIG = {
 
 TUTORIAL_TEXT = """\
 
-  You just started a simulated satellite running the satdeploy agent.
-  A test binary (test_app) is pre-installed and ready to deploy.
+  Simulated satellite is live. test_app v1.0.0 is deployed.
 
-  {line} Try these commands {line2}
+    satdeploy demo shell         Hop onto the satellite
+    satdeploy push test_app      Deploy v2.0.0
+    satdeploy status             See what's running
 
-    satdeploy status                  See what's deployed
-    satdeploy push test_app           Deploy a new version
-    satdeploy list test_app           See version history
-    satdeploy rollback test_app       Roll back to previous
-    satdeploy logs test_app           View service logs
-
-  {line} Explore the satellite {line3}
-
-    satdeploy demo shell              Shell into the satellite
-                                      (agent logs stream live)
-
-  {line} Ground station (CSH) {line4}
-
-    For the CSH ground station interface:
-    $ docker compose run csh
-
-  {line} When you're done {line5}
-
-    satdeploy demo stop               Stop the simulator
-    satdeploy init                    Generate config for real hardware
+  When you're done:  satdeploy demo stop
 """
 
 
@@ -319,14 +301,7 @@ def _wait_for_agent(max_attempts: int = 15, interval: float = 2.0) -> bool:
 
 def _print_tutorial() -> None:
     """Print the guided tutorial output."""
-    line = "\u2500" * 3
-    click.echo(TUTORIAL_TEXT.format(
-        line=line,
-        line2="\u2500" * 33,
-        line3="\u2500" * 30,
-        line4="\u2500" * 29,
-        line5="\u2500" * 31,
-    ))
+    click.echo(TUTORIAL_TEXT)
 
 
 def _start_with_repo_compose(compose_file: Path) -> None:
@@ -549,8 +524,8 @@ SATELLITE_BANNER = f"""
 {BOLD}    satdeploy demo shell{RESET}
 {DIM}    simulated satellite · agent live{RESET}
 
-{DIM}    Deploy from another terminal and
-    watch the agent respond here.
+{DIM}    You're on the simulated satellite.
+    Run your apps, inspect files, explore.
     Type {RESET}{CYAN}exit{RESET}{DIM} to return to ground.{RESET}
 """
 
