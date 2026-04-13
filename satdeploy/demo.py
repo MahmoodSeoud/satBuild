@@ -236,6 +236,34 @@ def _reset_demo_history() -> None:
         history_db.unlink()
 
 
+def _seed_demo_history() -> None:
+    """Seed history.db with a v1 deployment so `status` shows test_app deployed.
+
+    Without this, a fresh demo reports "not deployed" even though v1 is already
+    on the satellite — misleading for first-run users. Seeding a push record for
+    v1 makes the initial status match reality and frames the subsequent `push`
+    as an upgrade, not a first install.
+    """
+    import hashlib
+    from satdeploy.history import History, DeploymentRecord
+
+    v1_binary = _find_demo_binary("v1")
+    file_hash = hashlib.sha256(v1_binary.read_bytes()).hexdigest()
+
+    history_db = DEMO_CONFIG_PATH.parent / "history.db"
+    history = History(history_db)
+    history.init_db()
+    history.record(DeploymentRecord(
+        app="test_app",
+        file_hash=file_hash,
+        remote_path="/opt/demo/bin/test_app",
+        action="push",
+        success=True,
+        module="demo-satellite",
+        provenance_source="manual",
+    ))
+
+
 def _copy_demo_binary() -> None:
     """Prepare v2 demo binary in the demo binaries directory.
 
@@ -400,6 +428,7 @@ def demo_start() -> None:
     if compose_file.exists() and _is_agent_container_running(compose_file):
         if DEMO_CONFIG_PATH.exists():
             _reset_demo_history()
+            _seed_demo_history()
             click.echo(success("Demo already running"))
             _print_tutorial()
             return
@@ -416,6 +445,7 @@ def demo_start() -> None:
     # Write demo config and reset history so every demo is a clean slate
     _write_demo_config()
     _reset_demo_history()
+    _seed_demo_history()
 
     # Copy demo binary (v2 = the "new version" user will deploy)
     _copy_demo_binary()
