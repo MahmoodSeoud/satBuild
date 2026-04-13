@@ -230,7 +230,7 @@ def _seed_demo_history() -> None:
     from satdeploy.history import History, DeploymentRecord
 
     v1_binary = _find_demo_binary("v1")
-    file_hash = hashlib.sha256(v1_binary.read_bytes()).hexdigest()
+    file_hash = hashlib.sha256(v1_binary.read_bytes()).hexdigest()[:8]
 
     history_db = DEMO_CONFIG_PATH.parent / "history.db"
     history = History(history_db)
