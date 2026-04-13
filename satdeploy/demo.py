@@ -206,6 +206,16 @@ def _write_demo_config() -> None:
         yaml.dump(DEMO_CONFIG, f, default_flow_style=False)
 
 
+def _reset_demo_history() -> None:
+    """Remove the demo history database so every demo start is a clean slate.
+
+    Users should never see stale deployments from a previous demo session.
+    """
+    history_db = DEMO_DIR / "history.db"
+    if history_db.exists():
+        history_db.unlink()
+
+
 def _copy_demo_binary() -> None:
     """Prepare v2 demo binary in the demo binaries directory.
 
@@ -371,6 +381,7 @@ def demo_start() -> None:
     compose_file = _get_compose_file()
     if compose_file.exists() and _is_agent_container_running(compose_file):
         if DEMO_CONFIG_PATH.exists():
+            _reset_demo_history()
             click.echo(success("Demo already running"))
             _print_tutorial()
             return
@@ -384,8 +395,9 @@ def demo_start() -> None:
         _start_standalone()
         compose_file = DEMO_DIR / "docker-compose.yml"
 
-    # Write demo config
+    # Write demo config and reset history so every demo is a clean slate
     _write_demo_config()
+    _reset_demo_history()
 
     # Copy demo binary (v2 = the "new version" user will deploy)
     _copy_demo_binary()
@@ -432,6 +444,11 @@ def demo_stop(clean: bool = False) -> None:
             click.echo(warning(f"docker compose down failed: {result.stderr}"))
     else:
         click.echo("Demo environment is not running.")
+
+    # Always remove demo history so next start is a clean slate
+    history_db = DEMO_DIR / "history.db"
+    if history_db.exists():
+        history_db.unlink()
 
     if clean:
         # DEMO_CONFIG_PATH is inside DEMO_DIR, so removing DEMO_DIR cleans both
