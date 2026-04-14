@@ -567,6 +567,12 @@ def completion(install: bool, uninstall: bool):
     default=False,
     help="Force deploy even if same version",
 )
+@click.option(
+    "--require-clean",
+    is_flag=True,
+    default=False,
+    help="Refuse to deploy from a dirty git working tree",
+)
 @config_option
 @node_option
 def push(
@@ -575,6 +581,7 @@ def push(
     local: str | None,
     remote_override: str | None,
     force: bool,
+    require_clean: bool,
     config_path: Path | None,
     node_override: int | None,
 ):
@@ -671,6 +678,12 @@ def push(
         provenance_map[app_name] = (provenance, prov_source)
 
         if prov_source == "local" and is_dirty(provenance):
+            if require_clean:
+                raise SatDeployError(
+                    f"Refusing to deploy {app_name} — working tree is dirty "
+                    f"(tagged {provenance}). Commit or stash your changes, "
+                    f"or drop --require-clean."
+                )
             click.echo(warning(f"Deploying from uncommitted changes — file tagged as {provenance}"))
 
     history = get_history(config.history_path)
