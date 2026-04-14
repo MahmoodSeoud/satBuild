@@ -757,7 +757,17 @@ def push(
                         provenance_source=prov_source,
                     ))
                     provenance_display = f" ({provenance})" if provenance else ""
-                    click.echo(success(f"Deployed {app} ({local_hash}){provenance_display}"))
+                    if result.skipped:
+                        click.echo(warning(
+                            f"{app} ({local_hash}) is already deployed. "
+                            f"Use --force to push anyway."
+                        ))
+                    elif result.restored:
+                        click.echo(warning(
+                            f"{app} ({local_hash}) restored from backup."
+                        ))
+                    else:
+                        click.echo(success(f"Deployed {app} ({local_hash}){provenance_display}"))
                 else:
                     history.record(DeploymentRecord(
                         module=config.module_name,
