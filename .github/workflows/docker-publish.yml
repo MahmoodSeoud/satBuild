@@ -21,10 +21,18 @@ jobs:
       packages: write
 
     steps:
-      - name: Checkout with submodules
+      # Sim image only needs satdeploy-agent/ + demo/ — do NOT recurse
+      # into satdeploy-apm/ submodules. They're unused by Dockerfile.sim
+      # and a stale apm submodule pointer used to break this whole job.
+      - name: Checkout (no submodules)
         uses: actions/checkout@v4
-        with:
-          submodules: recursive
+
+      - name: Init only the submodules the sim image needs
+        run: |
+          git submodule update --init --recursive --depth=1 \
+            satdeploy-agent/lib/csp \
+            satdeploy-agent/lib/dtp \
+            satdeploy-agent/lib/param
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
