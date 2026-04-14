@@ -1,10 +1,13 @@
-# satdeploy demo — single pane walkthrough
+# satdeploy demo — zero-prerequisite push + rollback in 4 commands
 #
 # Flow:
-#   1. demo start          (boot the simulated satellite)
-#   2. demo shell          (hop onto the sat, run test_app → v1)
-#   3. push test_app       (deploy v2 from the ground station)
-#   4. demo shell          (hop back on, run test_app → v2 with new feature)
+#   1. satdeploy status         (baseline — test_app v1.0.0 deployed, git-tagged)
+#   2. satdeploy push test_app  (deploys v2 — new hash, new git commit)
+#   3. satdeploy rollback test_app  (undoes in one command)
+#   4. satdeploy status         (proof — back to v1 hash, original git commit)
+#
+# No Docker. No shell hops. No satellite simulator. Just the real product
+# code against a local throwaway git repo + target directory.
 #
 # Render:
 #   ROD_BROWSER_PATH="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" vhs demo/demo.tape
@@ -14,69 +17,45 @@ Output demo/demo.gif
 Set Shell        "zsh"
 Set FontSize     14
 Set Width        1400
-Set Height       900
+Set Height       600
 Set Theme        "Catppuccin Mocha"
 Set TypingSpeed  45ms
 Set Padding      20
 
-# ── Pre-clean previous state ───────────────────────────────────
-Type "satdeploy demo stop 2>/dev/null >/dev/null; clear"
+# ── Reset any prior demo state ─────────────────────────────────
+Type "satdeploy demo stop --clean 2>/dev/null >/dev/null; clear"
+Sleep 300ms
+Enter
+Sleep 500ms
+
+# ── Set up the demo (fast: just a git repo + a target dir) ─────
+Type "satdeploy demo start"
 Sleep 300ms
 Enter
 Sleep 2s
 
-# ── Scene 1: launch the sim ────────────────────────────────────
-Type "satdeploy demo start"
-Sleep 300ms
-Enter
-Sleep 8s
-
-# ── Scene 2: hop onto the satellite, run test_app (v1) ────────
-Type "satdeploy demo shell"
-Sleep 300ms
-Enter
-Sleep 3s
-
-Type "/opt/demo/bin/test_app"
-Sleep 300ms
-Enter
-Sleep 2500ms
-
-Type "exit"
-Sleep 300ms
-Enter
-Sleep 1500ms
-
-# ── Scene 3: ground station pushes v2 ──────────────────────────
+# ── Baseline: test_app v1.0.0 is deployed, git-tagged ──────────
 Type "satdeploy status"
 Sleep 300ms
 Enter
 Sleep 2500ms
 
+# ── Push v2 from the same working tree — new hash, new commit ──
 Type "satdeploy push test_app"
 Sleep 300ms
 Enter
-Sleep 5s
+Sleep 2s
 
+# ── Rollback in one command ────────────────────────────────────
+Type "satdeploy rollback test_app"
+Sleep 300ms
+Enter
+Sleep 2s
+
+# ── Proof: status now shows the original hash AND git commit ───
 Type "satdeploy status"
 Sleep 300ms
 Enter
-Sleep 2500ms
-
-# ── Scene 4: hop back on, confirm v2 landed ────────────────────
-Type "satdeploy demo shell"
-Sleep 300ms
-Enter
 Sleep 3s
-
-Type "/opt/demo/bin/test_app"
-Sleep 300ms
-Enter
-Sleep 2500ms
-
-Type "exit"
-Sleep 300ms
-Enter
-Sleep 1500ms
 
 Sleep 2s

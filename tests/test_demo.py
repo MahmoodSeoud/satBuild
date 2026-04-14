@@ -1,8 +1,9 @@
-"""Tests for the demo mode feature."""
+"""Tests for the dockerless demo mode."""
 
+import shutil
 import subprocess
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 import yaml
@@ -10,226 +11,270 @@ from click.testing import CliRunner
 
 from satdeploy.cli import main
 from satdeploy.demo import (
-    DEMO_DIR,
-    DEMO_AGENT_NODE,
-    DEMO_GROUND_NODE,
-    DEMO_ZMQ_PUB_PORT,
-    DEMO_ZMQ_SUB_PORT,
     DEMO_CONFIG,
-    GHCR_IMAGE,
-    _check_docker,
-    _find_demo_binary,
-    _is_agent_container_running,
-    _find_repo_compose,
+    DEMO_REMOTE_PATH,
+    _init_source_repo,
+    _install_v1_to_target,
+    _seed_demo_history,
     _write_demo_config,
-    _copy_demo_binary,
-    _wait_for_agent,
     demo_start,
-    demo_stop,
     demo_status,
+    demo_stop,
 )
+from satdeploy.history import History
 from satdeploy.output import SatDeployError
-from satdeploy.transport.base import TransportError
 
 
-class TestCheckDocker:
-    def test_docker_not_installed(self):
-        with patch("satdeploy.demo.subprocess.run", side_effect=FileNotFoundError):
-            with pytest.raises(SatDeployError, match="Docker not found"):
-                _check_docker()
+@pytest.fixture
+def isolated_demo(tmp_path, monkeypatch):
+    """Redirect all demo paths into tmp_path so tests don't touch ~/.satdeploy."""
+    root = tmp_path / "demo"
+    source = root / "source"
+    target = root / "target"
+    backups = root / "backups"
+    config_path = tmp_path / "config.yaml"
 
-    def test_docker_compose_not_available(self):
-        mock_result = MagicMock(returncode=1)
-        with patch("satdeploy.demo.subprocess.run", return_value=mock_result):
-            with pytest.raises(SatDeployError, match="Docker Compose v2 not found"):
-                _check_docker()
+    # Patch module-level constants AND the DEMO_CONFIG dict paths so the
+    # written config references tmp_path, not ~/.satdeploy.
+    monkeypatch.setattr("satdeploy.demo.DEMO_ROOT", root)
+    monkeypatch.setattr("satdeploy.demo.DEMO_SOURCE", source)
+    monkeypatch.setattr("satdeploy.demo.DEMO_TARGET", target)
+    monkeypatch.setattr("satdeploy.demo.DEMO_BACKUPS", backups)
+    monkeypatch.setattr("satdeploy.demo.DEFAULT_CONFIG_PATH", config_path)
+    monkeypatch.setattr("satdeploy.demo.DEMO_CONFIG_PATH", config_path)
+    monkeypatch.setattr(
+        "satdeploy.demo.SAVED_CONFIG_PATH", root / "saved-config.yaml",
+    )
+    monkeypatch.setitem(
+        DEMO_CONFIG, "target_dir", str(target),
+    )
+    monkeypatch.setitem(
+        DEMO_CONFIG, "backup_dir", str(backups),
+    )
+    monkeypatch.setitem(
+        DEMO_CONFIG["apps"]["test_app"], "local", str(source / "test_app"),
+    )
 
-    def test_docker_not_running(self):
-        compose_ok = MagicMock(returncode=0)
-        daemon_fail = MagicMock(returncode=1)
+    yield {
+        "root": root,
+        "source": source,
+        "target": target,
+        "backups": backups,
+        "config_path": config_path,
+    }
 
-        def side_effect(cmd, **kwargs):
-            if "compose" in cmd:
-                return compose_ok
-            return daemon_fail
-
-        with patch("satdeploy.demo.subprocess.run", side_effect=side_effect):
-            with pytest.raises(SatDeployError, match="Docker daemon is not running"):
-                _check_docker()
-
-    def test_docker_ok(self):
-        mock_result = MagicMock(returncode=0)
-        with patch("satdeploy.demo.subprocess.run", return_value=mock_result):
-            _check_docker()  # Should not raise
-
-
-class TestFindDemoBinary:
-    def test_finds_binary_in_repo(self):
-        path = _find_demo_binary("v2")
-        assert path.exists()
-        assert path.name == "test_app"
-
-    def test_missing_version_raises(self):
-        with pytest.raises(SatDeployError, match="Demo binary not found"):
-            _find_demo_binary("v99")
-
-
-class TestFindRepoCompose:
-    def test_always_returns_none_for_standalone_demo(self):
-        # Demo always uses standalone mode (pre-built sim image),
-        # so _find_repo_compose always returns None
-        compose = _find_repo_compose()
-        assert compose is None
+    if root.exists():
+        shutil.rmtree(root, ignore_errors=True)
 
 
-class TestIsAgentContainerRunning:
-    def test_agent_running(self, tmp_path):
-        compose_file = tmp_path / "docker-compose.yml"
-        compose_file.write_text("services: {}")
-        mock_result = MagicMock(returncode=0, stdout="satbuild-agent-1\n")
-        with patch("satdeploy.demo.subprocess.run", return_value=mock_result):
-            assert _is_agent_container_running(compose_file) is True
+class TestInitSourceRepo:
+    def test_creates_git_repo_with_two_commits(self, isolated_demo):
+        _init_source_repo()
+        source = isolated_demo["source"]
 
-    def test_agent_not_running(self, tmp_path):
-        compose_file = tmp_path / "docker-compose.yml"
-        compose_file.write_text("services: {}")
-        mock_result = MagicMock(returncode=0, stdout="")
-        with patch("satdeploy.demo.subprocess.run", return_value=mock_result):
-            assert _is_agent_container_running(compose_file) is False
+        assert (source / ".git").is_dir()
+        assert (source / "test_app").is_file()
 
-    def test_compose_error(self, tmp_path):
-        compose_file = tmp_path / "docker-compose.yml"
-        compose_file.write_text("services: {}")
-        mock_result = MagicMock(returncode=1, stdout="")
-        with patch("satdeploy.demo.subprocess.run", return_value=mock_result):
-            assert _is_agent_container_running(compose_file) is False
+        # HEAD should contain v2 content
+        head_content = (source / "test_app").read_text()
+        assert "v2.0.0" in head_content
+        assert "telemetry enabled" in head_content
+
+        # There should be exactly 2 commits
+        result = subprocess.run(
+            ["git", "rev-list", "--count", "HEAD"],
+            cwd=str(source),
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        assert result.stdout.strip() == "2"
+
+    def test_is_idempotent(self, isolated_demo):
+        """Re-running leaves a working repo with v2 at HEAD — no git state leaks."""
+        _init_source_repo()
+        _init_source_repo()
+
+        source = isolated_demo["source"]
+        assert (source / ".git").is_dir()
+        assert "v2.0.0" in (source / "test_app").read_text()
+
+        result = subprocess.run(
+            ["git", "rev-list", "--count", "HEAD"],
+            cwd=str(source),
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        assert result.stdout.strip() == "2"
+
+
+class TestInstallV1ToTarget:
+    def test_pre_installs_v1_content(self, isolated_demo):
+        _init_source_repo()
+        _install_v1_to_target()
+
+        resolved = (
+            isolated_demo["target"] / DEMO_REMOTE_PATH.lstrip("/")
+        )
+        assert resolved.exists()
+        content = resolved.read_text()
+        assert "v1.0.0" in content
+        assert "telemetry enabled" not in content
 
 
 class TestWriteDemoConfig:
-    def test_creates_config(self, tmp_path):
-        demo_config_path = tmp_path / ".demo-config.yaml"
-        with patch("satdeploy.demo.DEMO_DIR", tmp_path), \
-             patch("satdeploy.demo.DEMO_CONFIG_PATH", demo_config_path):
-            _write_demo_config()
-            assert demo_config_path.exists()
-            data = yaml.safe_load(demo_config_path.read_text())
-            assert data["name"] == "demo-satellite"
-            assert data["transport"] == "csp"
-            assert data["agent_node"] == DEMO_AGENT_NODE
-            assert "test_app" in data["apps"]
+    def test_writes_local_transport_config(self, isolated_demo):
+        _write_demo_config()
+        config_path = isolated_demo["config_path"]
+        assert config_path.exists()
+
+        data = yaml.safe_load(config_path.read_text())
+        assert data["transport"] == "local"
+        assert data["target_dir"] == str(isolated_demo["target"])
+        assert "test_app" in data["apps"]
+        assert data["apps"]["test_app"]["remote"] == DEMO_REMOTE_PATH
+
+    def test_backs_up_existing_user_config(self, isolated_demo):
+        isolated_demo["config_path"].parent.mkdir(parents=True, exist_ok=True)
+        isolated_demo["config_path"].write_text(
+            yaml.dump({"name": "my-satellite", "transport": "ssh"})
+        )
+        isolated_demo["root"].mkdir(parents=True, exist_ok=True)
+
+        _write_demo_config()
+
+        saved = isolated_demo["root"] / "saved-config.yaml"
+        assert saved.exists()
+        assert "my-satellite" in saved.read_text()
 
 
-class TestCopyDemoBinary:
-    def test_copies_v2_binary(self, tmp_path):
-        with patch("satdeploy.demo.DEMO_DIR", tmp_path):
-            _copy_demo_binary()
-            dest = tmp_path / "binaries" / "test_app"
-            assert dest.exists()
-            content = dest.read_text()
-            assert "v2.0.0" in content
+class TestSeedDemoHistory:
+    def test_seeds_v1_record_with_real_git_hash(self, isolated_demo):
+        _init_source_repo()
+        _install_v1_to_target()
+        _write_demo_config()
+        _seed_demo_history()
 
+        history_db = isolated_demo["config_path"].parent / "history.db"
+        assert history_db.exists()
 
-class TestWaitForAgent:
-    def test_agent_responds_immediately(self):
-        mock_transport = MagicMock()
-        mock_transport.get_status.return_value = {"test_app": MagicMock()}
-
-        with patch("satdeploy.demo.CSPTransport", return_value=mock_transport):
-            result = _wait_for_agent(max_attempts=3, interval=0.01)
-            assert result is True
-            mock_transport.connect.assert_called_once()
-            mock_transport.disconnect.assert_called_once()
-
-    def test_agent_responds_after_retries(self):
-        mock_transport = MagicMock()
-        mock_transport.get_status.side_effect = [
-            {},  # empty = not ready (but is a dict, so returns True)
-            {"test_app": MagicMock()},
-        ]
-
-        with patch("satdeploy.demo.CSPTransport", return_value=mock_transport):
-            result = _wait_for_agent(max_attempts=5, interval=0.01)
-            assert result is True
-
-    def test_agent_timeout(self):
-        mock_transport = MagicMock()
-        mock_transport.get_status.side_effect = TransportError("timeout")
-
-        with patch("satdeploy.demo.CSPTransport", return_value=mock_transport):
-            result = _wait_for_agent(max_attempts=3, interval=0.01)
-            assert result is False
-            mock_transport.disconnect.assert_called_once()
-
-    def test_connect_failure(self):
-        mock_transport = MagicMock()
-        mock_transport.connect.side_effect = TransportError("fail")
-
-        with patch("satdeploy.demo.CSPTransport", return_value=mock_transport):
-            result = _wait_for_agent(max_attempts=3, interval=0.01)
-            assert result is False
+        history = History(history_db)
+        history.init_db()
+        records = history.get_history("test_app")
+        assert len(records) == 1
+        record = records[0]
+        assert record.action == "push"
+        assert record.success is True
+        assert record.git_hash is not None
+        assert record.git_hash.startswith("main@")
+        # 8-char short hash, not full SHA
+        assert len(record.file_hash) == 8
 
 
 class TestDemoStart:
-    def test_start_already_running(self, tmp_path, capsys):
-        """When demo is already running, just re-print the tutorial."""
-        fake_config = tmp_path / "config.yaml"
-        fake_config.write_text("name: demo")
-        (tmp_path / "dc.yml").write_text("services: {}")
-        with patch("satdeploy.demo._check_docker"):
-            with patch("satdeploy.demo._get_compose_file", return_value=tmp_path / "dc.yml"):
-                with patch("satdeploy.demo._is_agent_container_running", return_value=True):
-                    with patch("satdeploy.demo.DEMO_CONFIG_PATH", fake_config):
-                        demo_start()
-                        output = capsys.readouterr().out
-                        assert "already running" in output.lower()
+    def test_end_to_end_sets_up_everything(self, isolated_demo):
+        demo_start()
 
-    def test_start_no_docker(self):
-        with patch("satdeploy.demo._check_docker",
-                    side_effect=SatDeployError("Docker not found")):
-            with pytest.raises(SatDeployError, match="Docker not found"):
+        assert isolated_demo["source"].exists()
+        assert (isolated_demo["source"] / ".git").is_dir()
+        assert isolated_demo["target"].exists()
+        assert isolated_demo["backups"].exists()
+        assert isolated_demo["config_path"].exists()
+
+        # v1 pre-installed on target
+        resolved = (
+            isolated_demo["target"] / DEMO_REMOTE_PATH.lstrip("/")
+        )
+        assert "v1.0.0" in resolved.read_text()
+
+        # History seeded
+        history_db = isolated_demo["config_path"].parent / "history.db"
+        assert history_db.exists()
+
+    def test_requires_git(self, isolated_demo):
+        with patch("satdeploy.demo.shutil.which", return_value=None):
+            with pytest.raises(SatDeployError, match="git is required"):
                 demo_start()
 
 
 class TestDemoStop:
-    def test_stop_repo_mode(self, capsys):
-        """In repo mode, demo stop doesn't stop containers."""
-        repo_compose = Path("/fake/docker-compose.yml")
-        with patch("satdeploy.demo._get_compose_file", return_value=repo_compose):
-            with patch("satdeploy.demo._find_repo_compose", return_value=repo_compose):
-                with patch("satdeploy.demo.DEMO_DIR", Path("/tmp/nonexistent")):
-                    with patch("satdeploy.demo.DEMO_CONFIG_PATH", Path("/tmp/nonexistent/config.yaml")):
-                        demo_stop()
-                        output = capsys.readouterr().out
-                        assert "leaving containers running" in output.lower()
+    def test_removes_demo_files(self, isolated_demo):
+        demo_start()
+        assert isolated_demo["target"].exists()
 
-    def test_stop_clean(self, tmp_path):
-        with patch("satdeploy.demo._get_compose_file", return_value=tmp_path / "dc.yml"):
-            with patch("satdeploy.demo._find_repo_compose", return_value=None):
-                with patch("satdeploy.demo.DEMO_DIR", tmp_path):
-                    tmp_path.mkdir(exist_ok=True)
-                    demo_stop(clean=True)
-                    assert not tmp_path.exists()
+        demo_stop()
+
+        assert not isolated_demo["target"].exists()
+        assert not isolated_demo["backups"].exists()
+
+    def test_clean_removes_root(self, isolated_demo):
+        demo_start()
+        demo_stop(clean=True)
+        assert not isolated_demo["root"].exists()
+
+    def test_restores_saved_user_config(self, isolated_demo):
+        # User has their own config
+        isolated_demo["config_path"].parent.mkdir(parents=True, exist_ok=True)
+        isolated_demo["config_path"].write_text(
+            yaml.dump({"name": "my-satellite", "transport": "ssh"})
+        )
+
+        demo_start()  # backs up the user config, replaces with demo config
+        demo_stop()  # should restore
+
+        restored = yaml.safe_load(isolated_demo["config_path"].read_text())
+        assert restored["name"] == "my-satellite"
 
 
 class TestDemoStatus:
-    def test_status_running(self, tmp_path, capsys):
-        compose_file = tmp_path / "docker-compose.yml"
-        compose_file.write_text("services: {}")
+    def test_not_set_up(self, isolated_demo, capsys):
+        demo_status()
+        out = capsys.readouterr().out
+        assert "not set up" in out.lower()
 
-        with patch("satdeploy.demo._get_compose_file", return_value=compose_file):
-            with patch("satdeploy.demo._is_agent_container_running", return_value=True):
-                with patch("satdeploy.demo._find_repo_compose", return_value=compose_file):
-                    demo_status()
-                    output = capsys.readouterr().out
-                    assert "running" in output.lower()
-                    assert str(DEMO_AGENT_NODE) in output
+    def test_set_up(self, isolated_demo, capsys):
+        demo_start()
+        capsys.readouterr()  # drain start output
+        demo_status()
+        out = capsys.readouterr().out
+        assert "set up" in out.lower()
 
-    def test_status_not_running(self, tmp_path, capsys):
-        with patch("satdeploy.demo._get_compose_file", return_value=tmp_path / "dc.yml"):
-            with patch("satdeploy.demo._is_agent_container_running", return_value=False):
-                demo_status()
-                output = capsys.readouterr().out
-                assert "not running" in output.lower()
+
+class TestDemoCLI:
+    def test_demo_help_lists_subcommands(self):
+        runner = CliRunner()
+        result = runner.invoke(main, ["demo", "--help"])
+        assert result.exit_code == 0
+        assert "start" in result.output
+        assert "stop" in result.output
+        assert "status" in result.output
+        # demo shell no longer exists
+        assert "shell" not in result.output
+
+    def test_bare_demo_invokes_start(self):
+        runner = CliRunner()
+        with patch("satdeploy.demo.demo_start") as mock_start:
+            runner.invoke(main, ["demo"])
+            mock_start.assert_called_once()
+
+    def test_demo_start_invokes_module(self):
+        runner = CliRunner()
+        with patch("satdeploy.demo.demo_start") as mock_start:
+            runner.invoke(main, ["demo", "start"])
+            mock_start.assert_called_once()
+
+    def test_demo_stop_invokes_module(self):
+        runner = CliRunner()
+        with patch("satdeploy.demo.demo_stop") as mock_stop:
+            runner.invoke(main, ["demo", "stop"])
+            mock_stop.assert_called_once_with(clean=False)
+
+    def test_demo_stop_clean_invokes_module(self):
+        runner = CliRunner()
+        with patch("satdeploy.demo.demo_stop") as mock_stop:
+            runner.invoke(main, ["demo", "stop", "--clean"])
+            mock_stop.assert_called_once_with(clean=True)
 
 
 class TestConfigDirEnvvar:
@@ -281,44 +326,3 @@ class TestConfigDirEnvvar:
         )
         assert result.exit_code == 0
         assert "flag-host" in result.output
-
-
-class TestDemoCLI:
-    def test_demo_help(self):
-        runner = CliRunner()
-        result = runner.invoke(main, ["demo", "--help"])
-        assert result.exit_code == 0
-        assert "start" in result.output
-        assert "stop" in result.output
-        assert "status" in result.output
-        assert "shell" in result.output
-
-    def test_demo_start_invokes_module(self):
-        runner = CliRunner()
-        with patch("satdeploy.demo.demo_start") as mock_start:
-            result = runner.invoke(main, ["demo", "start"])
-            mock_start.assert_called_once()
-
-    def test_demo_stop_invokes_module(self):
-        runner = CliRunner()
-        with patch("satdeploy.demo.demo_stop") as mock_stop:
-            result = runner.invoke(main, ["demo", "stop"])
-            mock_stop.assert_called_once_with(clean=False)
-
-    def test_demo_stop_clean_invokes_module(self):
-        runner = CliRunner()
-        with patch("satdeploy.demo.demo_stop") as mock_stop:
-            result = runner.invoke(main, ["demo", "stop", "--clean"])
-            mock_stop.assert_called_once_with(clean=True)
-
-    def test_demo_shell_invokes_module(self):
-        runner = CliRunner()
-        with patch("satdeploy.demo.demo_shell") as mock_shell:
-            result = runner.invoke(main, ["demo", "shell"])
-            mock_shell.assert_called_once()
-
-    def test_demo_status_invokes_module(self):
-        runner = CliRunner()
-        with patch("satdeploy.demo.demo_status") as mock_status:
-            result = runner.invoke(main, ["demo", "status"])
-            mock_status.assert_called_once()

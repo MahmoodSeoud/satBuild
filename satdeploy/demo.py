@@ -1,204 +1,159 @@
-"""Demo mode for satdeploy — simulated satellite target via Docker.
+"""Zero-prerequisite demo mode for satdeploy.
 
-Uses the repo's docker-compose.yml to start zmqproxy + agent, then
-writes a demo config pointing at the running containers. When run from
-a git clone, uses the existing dev compose setup. When installed via pip
-(no docker-compose.yml), falls back to pulling a pre-built GHCR image.
+Sets up a throwaway git repo + local target directory so users can run
+the full push/status/rollback workflow in 10 seconds, with no Docker,
+no agent container, no CSP simulator, and no satellite hardware.
+
+The demo uses the real LocalTransport — every deploy, every hash, every
+rollback is real product code hitting real files. The only difference
+from a production deployment is that "remote" is a directory on the
+user's own machine instead of a satellite.
+
+After the demo clicks, the next step is `satdeploy init` to point
+satdeploy at real hardware (SSH or CSP).
 """
 
+import os
 import shutil
 import subprocess
-import time
 from pathlib import Path
+from typing import Optional
 
 import click
 import yaml
 
-from satdeploy.output import success, warning, SatDeployError
-from satdeploy.transport.csp import CSPTransport
-from satdeploy.transport.base import TransportError
+from satdeploy.output import success, SatDeployError
 
 
-DEMO_DIR = Path.home() / ".satdeploy" / "demo"
+DEMO_ROOT = Path.home() / ".satdeploy" / "demo"
+DEMO_SOURCE = DEMO_ROOT / "source"       # throwaway git repo with v1+v2 binaries
+DEMO_TARGET = DEMO_ROOT / "target"       # where files are "deployed" locally
+DEMO_BACKUPS = DEMO_ROOT / "backups"     # versioned backups for rollback
+
 DEFAULT_CONFIG_PATH = Path.home() / ".satdeploy" / "config.yaml"
-DEMO_CONFIG_PATH = DEFAULT_CONFIG_PATH  # Demo writes to default so `satdeploy status` just works
-SAVED_CONFIG_PATH = DEMO_DIR / "saved-config.yaml"  # Backup of user's real config
-GHCR_IMAGE = "ghcr.io/mahmoodseoud/satdeploy-sim:latest"
+DEMO_CONFIG_PATH = DEFAULT_CONFIG_PATH
+SAVED_CONFIG_PATH = DEMO_ROOT / "saved-config.yaml"
 
-# Demo satellite configuration — matches agent defaults
-DEMO_AGENT_NODE = 5425
-DEMO_GROUND_NODE = 40
-DEMO_ZMQ_PUB_PORT = 9600
-DEMO_ZMQ_SUB_PORT = 9601
-
-# Embedded compose for standalone mode (no repo checkout)
-STANDALONE_COMPOSE = """\
-services:
-  zmqproxy:
-    image: {image}
-    ports:
-      - "{pub_port}:{pub_port}"
-      - "{sub_port}:{sub_port}"
-    command: zmqproxy -s tcp://0.0.0.0:{pub_port} -p tcp://0.0.0.0:{sub_port}
-    restart: unless-stopped
-
-  agent:
-    image: {image}
-    command: satdeploy-agent -i ZMQ -p zmqproxy -S {pub_port} -P {sub_port}
-    depends_on:
-      zmqproxy:
-        condition: service_started
-    restart: unless-stopped
-"""
+# Deploy target inside DEMO_TARGET — mirrors a real satellite path layout
+# so the demo output looks like a real deployment.
+DEMO_REMOTE_PATH = "/opt/demo/bin/test_app"
 
 DEMO_CONFIG = {
-    "name": "demo-satellite",
-    "transport": "csp",
-    "zmq_endpoint": f"tcp://localhost:{DEMO_ZMQ_PUB_PORT}",
-    "agent_node": DEMO_AGENT_NODE,
-    "ground_node": DEMO_GROUND_NODE,
-    "zmq_pub_port": DEMO_ZMQ_PUB_PORT,
-    "zmq_sub_port": DEMO_ZMQ_SUB_PORT,
-    "backup_dir": "/opt/satdeploy/backups",
+    "name": "demo",
+    "transport": "local",
+    "target_dir": str(DEMO_TARGET),
+    "backup_dir": str(DEMO_BACKUPS),
     "max_backups": 5,
     "apps": {
         "test_app": {
-            "local": str(DEMO_DIR / "binaries" / "test_app"),
-            "remote": "/opt/demo/bin/test_app",
+            "local": str(DEMO_SOURCE / "test_app"),
+            "remote": DEMO_REMOTE_PATH,
             "service": None,
-            "param": None,
         }
     },
 }
 
+V1_SCRIPT = """\
+#!/bin/sh
+echo "test_app v1.0.0 (demo)"
+"""
+
+V2_SCRIPT = """\
+#!/bin/sh
+echo "test_app v2.0.0 (demo) — telemetry enabled"
+"""
+
 TUTORIAL_TEXT = """\
 
-  Simulated satellite is live. test_app v1.0.0 is deployed.
+  Ready. A throwaway git repo is at {source}
+  and test_app v1.0.0 is "deployed" to {target}{remote}.
 
-    satdeploy demo shell         Hop onto the satellite
-    satdeploy push test_app      Deploy v2.0.0
     satdeploy status             See what's running
+    satdeploy push test_app      Deploy v2.0.0 (git-tagged)
+    satdeploy rollback test_app  Undo the deploy in one command
 
   When you're done:  satdeploy demo stop
+  Next step:         satdeploy init   (point at real hardware)
 """
 
 
-def _repo_root() -> Path:
-    """Get the repo root (parent of satdeploy/ package)."""
-    return Path(__file__).parent.parent
+def _git(*args: str, cwd: Path) -> None:
+    """Run a git command in cwd, raising on failure."""
+    subprocess.run(
+        ["git", *args],
+        cwd=str(cwd),
+        check=True,
+        capture_output=True,
+        text=True,
+    )
 
 
-def _find_repo_compose() -> Path | None:
-    """Find the repo's docker-compose.yml if we're in a git checkout.
+def _init_source_repo() -> None:
+    """Create a throwaway git repo with two commits (v1 then v2).
 
-    NOTE: The repo's docker-compose.yml is for DEVELOPMENT (compiling agent/APM
-    from source). The demo always uses the standalone sim image so users never
-    have to build anything. Returns None to force standalone mode.
+    satdeploy reads git provenance from the directory containing the
+    binary being deployed. By committing v1 and v2 to real git commits,
+    every `push` and `rollback` gets real git hashes in the demo output
+    — which is the whole point: showing the user that satdeploy tracks
+    which commit made it to the target.
     """
-    return None  # Always use standalone sim image for demo
+    if DEMO_SOURCE.exists():
+        shutil.rmtree(DEMO_SOURCE)
+    DEMO_SOURCE.mkdir(parents=True)
 
+    _git("init", "-q", "-b", "main", cwd=DEMO_SOURCE)
+    # Scope user config to this repo so we don't touch ~/.gitconfig
+    _git("config", "user.email", "demo@satdeploy.local", cwd=DEMO_SOURCE)
+    _git("config", "user.name", "satdeploy demo", cwd=DEMO_SOURCE)
 
-def _find_demo_binary(version: str) -> Path:
-    """Find the demo binary for a given version (v1 or v2)."""
-    demo_path = _repo_root() / "demo" / version / "test_app"
-    if demo_path.exists():
-        return demo_path
-    raise SatDeployError(
-        f"Demo binary not found at {demo_path}. "
-        "Re-clone or reinstall satdeploy."
+    binary = DEMO_SOURCE / "test_app"
+
+    binary.write_text(V1_SCRIPT)
+    binary.chmod(0o755)
+    _git("add", "test_app", cwd=DEMO_SOURCE)
+    _git("commit", "-q", "-m", "feat: initial test_app v1.0.0", cwd=DEMO_SOURCE)
+
+    binary.write_text(V2_SCRIPT)
+    _git("add", "test_app", cwd=DEMO_SOURCE)
+    _git(
+        "commit", "-q",
+        "-m", "feat: enable telemetry (test_app v2.0.0)",
+        cwd=DEMO_SOURCE,
     )
 
 
-def _check_docker() -> None:
-    """Verify Docker is installed and running."""
-    try:
-        result = subprocess.run(
-            ["docker", "compose", "version"],
-            capture_output=True, text=True, timeout=10,
-        )
-        if result.returncode != 0:
-            raise SatDeployError(
-                "Docker Compose v2 not found. Install Docker Desktop: "
-                "https://www.docker.com/products/docker-desktop/"
-            )
-    except FileNotFoundError:
-        raise SatDeployError(
-            "Docker not found. Install Docker Desktop: "
-            "https://www.docker.com/products/docker-desktop/"
-        )
+def _install_v1_to_target() -> None:
+    """Pre-install v1 on the local target so `status` shows it deployed.
 
-    try:
-        result = subprocess.run(
-            ["docker", "info"],
-            capture_output=True, text=True, timeout=10,
-        )
-        if result.returncode != 0:
-            raise SatDeployError(
-                "Docker daemon is not running. Start Docker Desktop and try again."
-            )
-    except subprocess.TimeoutExpired:
-        raise SatDeployError(
-            "Docker daemon timed out. Start Docker Desktop and try again."
-        )
+    After the demo sets up the git repo at v2 (HEAD), we also temporarily
+    check out v1 to write it to the target dir, then return HEAD to v2 so
+    the user's next `push` deploys v2 as an upgrade.
+    """
+    resolved_target = DEMO_TARGET / DEMO_REMOTE_PATH.lstrip("/")
+    resolved_target.parent.mkdir(parents=True, exist_ok=True)
 
-
-def _get_compose_file() -> Path:
-    """Get the compose file used by the demo (repo or standalone)."""
-    # Check for repo compose first
-    repo_compose = _find_repo_compose()
-    if repo_compose:
-        return repo_compose
-    # Standalone mode uses the demo dir
-    return DEMO_DIR / "docker-compose.yml"
-
-
-def _is_agent_container_running(compose_file: Path) -> bool:
-    """Check if the agent container is running via docker compose."""
+    # Get the first commit's content for v1
     result = subprocess.run(
-        ["docker", "compose", "-f", str(compose_file), "ps",
-         "--status", "running", "--format", "{{.Name}}"],
-        capture_output=True, text=True, timeout=10,
+        ["git", "show", "HEAD~1:test_app"],
+        cwd=str(DEMO_SOURCE),
+        capture_output=True,
+        text=True,
+        check=True,
     )
-    return result.returncode == 0 and "agent" in result.stdout
-
-
-def _ensure_agent_dirs(compose_file: Path) -> None:
-    """Create required directories and pre-install v1 inside the agent container."""
-    subprocess.run(
-        ["docker", "compose", "-f", str(compose_file),
-         "exec", "-T", "agent", "mkdir", "-p",
-         "/opt/demo/bin", "/opt/satdeploy/backups"],
-        capture_output=True, text=True, timeout=10,
-    )
-    # Pre-install v1 on the "satellite" so rollback has something to restore
-    v1_binary = _find_demo_binary("v1")
-    subprocess.run(
-        ["docker", "compose", "-f", str(compose_file),
-         "cp", str(v1_binary), "agent:/opt/demo/bin/test_app"],
-        capture_output=True, text=True, timeout=10,
-    )
-    subprocess.run(
-        ["docker", "compose", "-f", str(compose_file),
-         "exec", "-T", "agent", "chmod", "755", "/opt/demo/bin/test_app"],
-        capture_output=True, text=True, timeout=10,
-    )
+    resolved_target.write_text(result.stdout)
+    resolved_target.chmod(0o755)
 
 
 def _write_demo_config() -> None:
-    """Write the demo config to the default config path.
-
-    If the user already has a real config, back it up first so
-    demo stop can restore it.
-    """
-    DEMO_DIR.mkdir(parents=True, exist_ok=True)
+    """Write the demo config to the default config path, backing up any existing one."""
+    DEMO_ROOT.mkdir(parents=True, exist_ok=True)
     DEMO_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
 
-    # Back up existing config (if it's not already a demo config)
     if DEMO_CONFIG_PATH.exists():
         try:
             with open(DEMO_CONFIG_PATH) as f:
                 existing = yaml.safe_load(f)
-            if existing and existing.get("name") != "demo-satellite":
+            if existing and existing.get("name") != "demo":
                 shutil.copy2(DEMO_CONFIG_PATH, SAVED_CONFIG_PATH)
         except (yaml.YAMLError, OSError):
             pass
@@ -208,29 +163,39 @@ def _write_demo_config() -> None:
 
 
 def _reset_demo_history() -> None:
-    """Remove the demo history database so every demo start is a clean slate.
-
-    Users should never see stale deployments from a previous demo session.
-    The history db sits next to the config file (derived from config path).
-    """
+    """Remove the demo history db so every demo start is a clean slate."""
     history_db = DEMO_CONFIG_PATH.parent / "history.db"
     if history_db.exists():
         history_db.unlink()
 
 
 def _seed_demo_history() -> None:
-    """Seed history.db with a v1 deployment so `status` shows test_app deployed.
+    """Seed history with a v1 push record so the baseline `status` shows deployed.
 
-    Without this, a fresh demo reports "not deployed" even though v1 is already
-    on the satellite — misleading for first-run users. Seeding a push record for
-    v1 makes the initial status match reality and frames the subsequent `push`
-    as an upgrade, not a first install.
+    Computes the real hash of the v1 binary sitting on the target and
+    the real git hash of the v1 commit, so every line of the baseline
+    output is honest.
     """
     import hashlib
-    from satdeploy.history import History, DeploymentRecord
+    from satdeploy.history import DeploymentRecord, History
+    from satdeploy.provenance import capture_provenance
 
-    v1_binary = _find_demo_binary("v1")
-    file_hash = hashlib.sha256(v1_binary.read_bytes()).hexdigest()[:8]
+    resolved_target = DEMO_TARGET / DEMO_REMOTE_PATH.lstrip("/")
+    if not resolved_target.exists():
+        return
+
+    file_hash = hashlib.sha256(resolved_target.read_bytes()).hexdigest()[:8]
+
+    # Git provenance for v1 — we get it by asking git about HEAD~1
+    # directly, since the source binary on disk is at HEAD (v2).
+    git_hash_full = subprocess.run(
+        ["git", "rev-parse", "--short=8", "HEAD~1"],
+        cwd=str(DEMO_SOURCE),
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+    git_provenance = f"main@{git_hash_full}"
 
     history_db = DEMO_CONFIG_PATH.parent / "history.db"
     history = History(history_db)
@@ -238,367 +203,91 @@ def _seed_demo_history() -> None:
     history.record(DeploymentRecord(
         app="test_app",
         file_hash=file_hash,
-        remote_path="/opt/demo/bin/test_app",
+        remote_path=DEMO_REMOTE_PATH,
         action="push",
         success=True,
-        module="demo-satellite",
-        provenance_source="manual",
+        module="demo",
+        git_hash=git_provenance,
+        provenance_source="local",
     ))
-
-
-def _copy_demo_binary() -> None:
-    """Prepare v2 demo binary in the demo binaries directory.
-
-    If running from a repo checkout, copies the real v2 binary.
-    If installed via pip (no repo), creates a simple shell script
-    that serves as a "new version" for the demo.
-    """
-    dest_dir = DEMO_DIR / "binaries"
-    dest_dir.mkdir(parents=True, exist_ok=True)
-    dest = dest_dir / "test_app"
-
-    # Try repo first
-    try:
-        source = _find_demo_binary("v2")
-        shutil.copy2(source, dest)
-    except SatDeployError:
-        # No repo — create a synthetic v2 binary for the demo
-        dest.write_text("#!/bin/sh\necho 'test_app v2 (satdeploy demo)'\n")
-
-    dest.chmod(0o755)
-
-
-def _wait_for_agent(max_attempts: int = 15, interval: float = 2.0) -> bool:
-    """Wait for the demo agent to respond. Connect once, poll in loop."""
-    click.echo("Waiting for agent...")
-    transport = CSPTransport(
-        zmq_endpoint=f"tcp://localhost:{DEMO_ZMQ_PUB_PORT}",
-        agent_node=DEMO_AGENT_NODE,
-        ground_node=DEMO_GROUND_NODE,
-        backup_dir="/opt/satdeploy/backups",
-        zmq_pub_port=DEMO_ZMQ_PUB_PORT,
-        zmq_sub_port=DEMO_ZMQ_SUB_PORT,
-    )
-    try:
-        transport.connect()
-    except (TransportError, Exception):
-        return False
-
-    try:
-        for attempt in range(max_attempts):
-            try:
-                result = transport.get_status()
-                if isinstance(result, dict):
-                    return True
-            except TransportError:
-                pass
-            time.sleep(interval)
-    finally:
-        transport.disconnect()
-
-    return False
-
-
-def _print_tutorial() -> None:
-    """Print the guided tutorial output."""
-    click.echo(TUTORIAL_TEXT)
-
-
-def _start_with_repo_compose(compose_file: Path) -> None:
-    """Start the demo using the repo's docker-compose.yml.
-
-    This is the fast path — the satdev image is already built locally,
-    so `docker compose up -d` takes seconds, not minutes.
-    """
-    # Check if containers are already running
-    if _is_agent_container_running(compose_file):
-        click.echo(success("Docker containers already running"))
-    else:
-        click.echo("Starting containers (using repo docker-compose.yml)...")
-        result = subprocess.run(
-            ["docker", "compose", "-f", str(compose_file), "up", "-d"],
-            capture_output=True, text=True, timeout=300,
-        )
-        if result.returncode != 0:
-            if "port is already allocated" in result.stderr.lower() or \
-               "address already in use" in result.stderr.lower():
-                raise SatDeployError(
-                    f"Port {DEMO_ZMQ_PUB_PORT} or {DEMO_ZMQ_SUB_PORT} is already in use. "
-                    f"Check with: lsof -i :{DEMO_ZMQ_PUB_PORT}"
-                )
-            raise SatDeployError(f"Failed to start containers: {result.stderr}")
-        click.echo(success("Docker containers started"))
-
-    # Create demo directories inside agent container
-    _ensure_agent_dirs(compose_file)
-
-
-def _start_standalone() -> None:
-    """Start the demo without the repo (standalone/pip install mode).
-
-    Pulls a pre-built GHCR image or builds Dockerfile.sim locally.
-    """
-    # Try GHCR pull
-    click.echo("Pulling simulator image...")
-    result = subprocess.run(
-        ["docker", "pull", GHCR_IMAGE],
-        capture_output=True, text=True, timeout=300,
-    )
-
-    if result.returncode == 0:
-        image = GHCR_IMAGE
-    else:
-        # Fall back to local Dockerfile.sim build
-        dockerfile = _repo_root() / "Dockerfile.sim"
-        if not dockerfile.exists():
-            raise SatDeployError(
-                "Cannot start demo: no pre-built image available and "
-                "Dockerfile.sim not found. Clone the repo and try again."
-            )
-        click.echo(warning(
-            "Pre-built image not available. Building locally — "
-            "this may take ~5 minutes on first run."
-        ))
-        local_image = "satdeploy-sim:local"
-        result = subprocess.run(
-            ["docker", "build", "-t", local_image,
-             "-f", str(dockerfile), str(_repo_root())],
-            timeout=600,
-        )
-        if result.returncode != 0:
-            raise SatDeployError("Failed to build simulator image locally.")
-        image = local_image
-
-    # Write standalone compose file
-    DEMO_DIR.mkdir(parents=True, exist_ok=True)
-    compose_path = DEMO_DIR / "docker-compose.yml"
-    compose_path.write_text(STANDALONE_COMPOSE.format(
-        image=image,
-        pub_port=DEMO_ZMQ_PUB_PORT,
-        sub_port=DEMO_ZMQ_SUB_PORT,
-    ))
-
-    # Start containers
-    click.echo("Starting containers...")
-    result = subprocess.run(
-        ["docker", "compose", "-f", str(compose_path), "up", "-d"],
-        capture_output=True, text=True, timeout=60,
-    )
-    if result.returncode != 0:
-        raise SatDeployError(f"Failed to start containers: {result.stderr}")
-    click.echo(success("Docker containers started"))
 
 
 def demo_start() -> None:
-    """Start the demo environment.
+    """Set up the dockerless demo environment."""
+    # Friendly preflight: git is the only hard dependency
+    if not shutil.which("git"):
+        raise SatDeployError(
+            "git is required for the demo (used to track provenance). "
+            "Install git and try again."
+        )
 
-    Two modes:
-    1. Repo checkout: uses the existing docker-compose.yml (fast — image already built)
-    2. Standalone: pulls GHCR image or builds Dockerfile.sim (slow first run)
-    """
-    _check_docker()
+    click.echo("Setting up demo environment...")
 
-    # Check if demo is already fully set up and running
-    compose_file = _get_compose_file()
-    if compose_file.exists() and _is_agent_container_running(compose_file):
-        if DEMO_CONFIG_PATH.exists():
-            _reset_demo_history()
-            _seed_demo_history()
-            click.echo(success("Demo already running"))
-            _print_tutorial()
-            return
+    DEMO_ROOT.mkdir(parents=True, exist_ok=True)
+    if DEMO_TARGET.exists():
+        shutil.rmtree(DEMO_TARGET)
+    DEMO_TARGET.mkdir(parents=True)
+    if DEMO_BACKUPS.exists():
+        shutil.rmtree(DEMO_BACKUPS)
+    DEMO_BACKUPS.mkdir(parents=True)
 
-    # Start containers
-    repo_compose = _find_repo_compose()
-    if repo_compose:
-        _start_with_repo_compose(repo_compose)
-        compose_file = repo_compose
-    else:
-        _start_standalone()
-        compose_file = DEMO_DIR / "docker-compose.yml"
-
-    # Write demo config and reset history so every demo is a clean slate
+    _init_source_repo()
+    _install_v1_to_target()
     _write_demo_config()
     _reset_demo_history()
     _seed_demo_history()
 
-    # Copy demo binary (v2 = the "new version" user will deploy)
-    _copy_demo_binary()
-
-    # Wait for agent readiness
-    if _wait_for_agent():
-        click.echo(success(f"Agent responding on CSP node {DEMO_AGENT_NODE}"))
-    else:
-        logs_result = subprocess.run(
-            ["docker", "compose", "-f", str(compose_file), "logs", "agent",
-             "--tail", "20"],
-            capture_output=True, text=True, timeout=10,
-        )
-        click.echo(warning("Agent did not respond within 30 seconds."))
-        if logs_result.stdout:
-            click.echo("Agent logs:")
-            click.echo(logs_result.stdout[-500:])
-        raise SatDeployError(
-            "Demo agent failed to start. Check Docker logs above."
-        )
-
     click.echo(success(f"Demo config written to {DEMO_CONFIG_PATH}"))
-    _print_tutorial()
+    click.echo(TUTORIAL_TEXT.format(
+        source=DEMO_SOURCE,
+        target=DEMO_TARGET,
+        remote=DEMO_REMOTE_PATH,
+    ))
 
 
 def demo_stop(clean: bool = False) -> None:
-    """Stop the demo environment."""
-    compose_file = _get_compose_file()
-    repo_compose = _find_repo_compose()
+    """Tear down the demo environment."""
+    if DEMO_ROOT.exists() and not clean:
+        # Keep the saved-config backup if present; remove everything else.
+        for child in DEMO_ROOT.iterdir():
+            if child.name == "saved-config.yaml":
+                continue
+            if child.is_dir():
+                shutil.rmtree(child)
+            else:
+                child.unlink()
+        click.echo(success("Demo target and backups removed"))
 
-    if repo_compose and compose_file == repo_compose:
-        # Using repo compose — don't stop dev containers, just remove demo config
-        click.echo("Demo uses repo docker-compose.yml — leaving containers running.")
-        click.echo("Stop them with: docker compose down")
-    elif compose_file.exists():
-        click.echo("Stopping demo containers...")
-        result = subprocess.run(
-            ["docker", "compose", "-f", str(compose_file), "down"],
-            capture_output=True, text=True, timeout=30,
-        )
-        if result.returncode == 0:
-            click.echo(success("Demo containers stopped"))
-        else:
-            click.echo(warning(f"docker compose down failed: {result.stderr}"))
-    else:
-        click.echo("Demo environment is not running.")
-
-    # Always remove demo history so next start is a clean slate
     _reset_demo_history()
 
-    # Restore user's real config if we backed one up
+    # Restore the user's real config if we stashed one
     if SAVED_CONFIG_PATH.exists():
         shutil.move(str(SAVED_CONFIG_PATH), str(DEMO_CONFIG_PATH))
         click.echo(success("Restored your previous config"))
     elif DEMO_CONFIG_PATH.exists():
-        DEMO_CONFIG_PATH.unlink()
-        click.echo(success("Demo config removed"))
+        try:
+            with open(DEMO_CONFIG_PATH) as f:
+                existing = yaml.safe_load(f)
+            if existing and existing.get("name") == "demo":
+                DEMO_CONFIG_PATH.unlink()
+                click.echo(success("Demo config removed"))
+        except (yaml.YAMLError, OSError):
+            pass
 
-    if clean:
-        if DEMO_DIR.exists():
-            shutil.rmtree(DEMO_DIR)
+    if clean and DEMO_ROOT.exists():
+        shutil.rmtree(DEMO_ROOT)
         click.echo(success("Removed demo files"))
 
 
 def demo_status() -> None:
-    """Show demo environment status."""
-    compose_file = _get_compose_file()
-
-    if not compose_file.exists() or not _is_agent_container_running(compose_file):
-        click.echo("Demo environment is not running.")
+    """Show whether the demo environment is set up."""
+    if not DEMO_ROOT.exists() or not DEMO_TARGET.exists():
+        click.echo("Demo environment is not set up.")
         click.echo("Start with: satdeploy demo start")
         return
 
-    click.echo(success("Demo environment is running"))
-    click.echo(f"  Agent:     CSP node {DEMO_AGENT_NODE}")
-    click.echo(f"  ZMQ proxy: localhost:{DEMO_ZMQ_PUB_PORT}/{DEMO_ZMQ_SUB_PORT}")
-    click.echo(f"  Config:    {DEMO_CONFIG_PATH}")
-
-    repo_compose = _find_repo_compose()
-    if repo_compose:
-        click.echo(f"  Mode:      repo (using {repo_compose})")
-    else:
-        click.echo(f"  Mode:      standalone")
-
-
-DIM = "\033[2m"
-BOLD = "\033[1m"
-RESET = "\033[0m"
-CYAN = "\033[36m"
-
-SATELLITE_BANNER = f"""
-{DIM}          ╭─────╮
-    ╔═══╗ │     │ ╔═══╗
-    ║ ░ ║─┤ SAT ├─║ ░ ║
-    ║ ░ ║ │ DPL │ ║ ░ ║
-    ╚═══╝ │     │ ╚═══╝
-          ╰──┬──╯
-             │
-           ╌╌╌╌╌{RESET}
-
-{BOLD}    satdeploy demo shell{RESET}
-{DIM}    simulated satellite · agent live{RESET}
-
-{DIM}    You're on the simulated satellite.
-    Run your apps, inspect files, explore.
-    Type {RESET}{CYAN}exit{RESET}{DIM} to return to ground.{RESET}
-"""
-
-
-def demo_shell() -> None:
-    """Open an interactive shell on the simulated satellite.
-
-    Drops into bash inside the agent container with live agent logs
-    streaming in the background, so you can see what the agent does
-    when commands arrive from the ground station.
-    """
-    compose_file = _get_compose_file()
-
-    if not compose_file.exists() or not _is_agent_container_running(compose_file):
-        raise SatDeployError(
-            "Demo environment is not running. Start with: satdeploy demo start"
-        )
-
-    # Print the satellite banner
-    click.echo(SATELLITE_BANNER)
-
-    # Stream agent logs in background, fixing newlines for raw terminal output.
-    # Docker log output uses bare \n which doesn't return the cursor to column 0
-    # in a shared terminal — we translate to \r\n so logs display cleanly.
-    import sys
-    import threading
-
-    log_proc = subprocess.Popen(
-        ["docker", "compose", "-f", str(compose_file),
-         "logs", "-f", "--tail", "0", "--no-log-prefix", "agent"],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.DEVNULL,
-    )
-
-    def _stream_logs():
-        try:
-            for line in log_proc.stdout:
-                text = line.decode("utf-8", errors="replace").rstrip("\n\r")
-                if not text:
-                    continue
-                # Strip ANSI escape codes for filtering
-                import re
-                clean = re.sub(r'\x1b\[[0-9;]*m', '', text).strip()
-                if not clean:
-                    continue
-                # Filter out library internals and agent startup noise
-                if clean.startswith(("[LOG]", "[WARN]", "satdeploy-agent",
-                                    "Interface:", "Port/Device:",
-                                    "CSP node:", "Netmask:",
-                                    "ZMQ init", "Agent running",
-                                    "[deploy] Initializing",
-                                    "[deploy] Listening")):
-                    continue
-                sys.stdout.write(f"\r\033[2m{text}\033[0m\r\n")
-                sys.stdout.flush()
-        except (ValueError, OSError):
-            pass  # pipe closed
-
-    log_thread = threading.Thread(target=_stream_logs, daemon=True)
-    log_thread.start()
-
-    try:
-        subprocess.run(
-            ["docker", "compose", "-f", str(compose_file),
-             "exec", "agent", "/bin/bash"],
-        )
-    except KeyboardInterrupt:
-        click.echo("\nShell closed.")
-    finally:
-        log_proc.terminate()
-        try:
-            log_proc.wait(timeout=3)
-        except subprocess.TimeoutExpired:
-            log_proc.kill()
-
-
+    click.echo(success("Demo environment is set up"))
+    click.echo(f"  Source repo: {DEMO_SOURCE}")
+    click.echo(f"  Target:      {DEMO_TARGET}")
+    click.echo(f"  Backups:     {DEMO_BACKUPS}")
+    click.echo(f"  Config:      {DEMO_CONFIG_PATH}")
