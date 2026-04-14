@@ -1,16 +1,7 @@
-# satdeploy demo — zero-prerequisite push + rollback in 4 commands
-#
-# Flow:
-#   1. satdeploy status         (baseline — test_app v1.0.0 deployed, git-tagged)
-#   2. satdeploy push test_app  (deploys v2 — new hash, new git commit)
-#   3. satdeploy rollback test_app  (undoes in one command)
-#   4. satdeploy status         (proof — back to v1 hash, original git commit)
-#
-# No Docker. No shell hops. No satellite simulator. Just the real product
-# code against a local throwaway git repo + target directory.
+# satdeploy demo - deploy, verify, roll back.
 #
 # Render:
-#   ROD_BROWSER_PATH="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" vhs demo/demo.tape
+#   vhs demo/demo.tape
 
 Output demo/demo.gif
 
@@ -18,44 +9,50 @@ Set Shell        "zsh"
 Set FontSize     14
 Set Width        1400
 Set Height       600
-Set Theme        "Catppuccin Mocha"
-Set TypingSpeed  45ms
+Set Theme        { "name": "ground-station", "background": "#0b0f17", "foreground": "#e6e6e6", "cursor": "#7dd3fc", "selection": "#1e293b", "black": "#1a1f2e", "red": "#fca5a5", "green": "#86efac", "yellow": "#fde68a", "blue": "#93c5fd", "magenta": "#c4b5fd", "cyan": "#7dd3fc", "white": "#d1d5db", "brightBlack": "#7d8799", "brightRed": "#fecaca", "brightGreen": "#bbf7d0", "brightYellow": "#fef3c7", "brightBlue": "#bfdbfe", "brightMagenta": "#ddd6fe", "brightCyan": "#a5e8fd", "brightWhite": "#f3f4f6" }
+Set TypingSpeed  35ms
 Set Padding      20
 
-# ── Reset any prior demo state ─────────────────────────────────
-Type "satdeploy demo stop --clean 2>/dev/null >/dev/null; clear"
-Sleep 300ms
+Hide
+Type `export PS1=$'\n%F{244}$%f '`
 Enter
-Sleep 500ms
-
-# ── Set up the demo (fast: just a git repo + a target dir) ─────
-Type "satdeploy demo start"
-Sleep 300ms
+Type `export PATH="$HOME/.satdeploy/demo/target/opt/demo/bin:$PATH"`
 Enter
-Sleep 2s
+Type "satdeploy demo stop --clean 2>/dev/null >/dev/null"
+Enter
+Type "satdeploy demo start >/dev/null 2>&1"
+Enter
+Type "clear"
+Enter
+Sleep 400ms
+Show
 
-# ── Baseline: test_app v1.0.0 is deployed, git-tagged ──────────
-Type "satdeploy status"
+Type "test_app"
 Sleep 300ms
 Enter
 Sleep 2500ms
 
-# ── Push v2 from the same working tree — new hash, new commit ──
 Type "satdeploy push test_app"
 Sleep 300ms
 Enter
-Sleep 2s
+Sleep 3500ms
 
-# ── Rollback in one command ────────────────────────────────────
+Type "test_app"
+Sleep 300ms
+Enter
+Sleep 3000ms
+
 Type "satdeploy rollback test_app"
 Sleep 300ms
 Enter
-Sleep 2s
+Sleep 3000ms
 
-# ── Proof: status now shows the original hash AND git commit ───
-Type "satdeploy status"
+Type "test_app"
 Sleep 300ms
 Enter
-Sleep 3s
+Sleep 4500ms
 
-Sleep 2s
+Hide
+Type "satdeploy demo stop --clean >/dev/null 2>&1"
+Enter
+Show

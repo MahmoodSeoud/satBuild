@@ -7,6 +7,10 @@
   ╚═════╝ ╚═╝  ╚═╝   ╚═╝   ╚═════╝ ╚══════╝╚═╝     ╚══════╝ ╚═════╝    ╚═╝
 ```
 
+![satdeploy demo: run, push, run, rollback, run](demo/demo.gif)
+
+> This is `satdeploy demo` against a local throwaway target, not a real satellite. `test_app` is a tiny shell script the demo ships so you can see the deploy land and unwind with your own eyes. Against real hardware the binary lives on the target (SSH or CSP), not the ground station, and you'd watch its effects there instead of running it next to `satdeploy`. Everything else in the gif (hashing, backups, git provenance, rollback) is the exact same code path as a production deploy.
+
 We flew [DISCO-2](https://discosat.dk/v2_disco-2/), a 3U student CubeSat, and then spent weeks trying to recreate what was on it.
 
 
