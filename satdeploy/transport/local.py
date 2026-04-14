@@ -91,11 +91,22 @@ class LocalTransport(Transport):
         """Copy the file currently at resolved_remote into the backup dir.
 
         Returns the backup path, or None if there was nothing to back up.
+        Deduplicates: if the file we'd back up has the same hash as the
+        most recent existing backup, returns the existing backup path
+        without creating a new file. This prevents `push --force` of an
+        identical binary from polluting the backup chain with redundant
+        entries (which would otherwise make rollback no-op by pointing
+        at the same hash that's already deployed).
         """
         if not os.path.exists(resolved_remote):
             return None
 
         file_hash = compute_file_hash(resolved_remote)
+
+        existing = self.list_backups(app_name)
+        if existing and existing[0].file_hash == file_hash:
+            return existing[0].path
+
         ts = datetime.now().strftime("%Y%m%d-%H%M%S")
         backup_name = f"{ts}-{file_hash}.bak"
         app_dir = self._app_backup_dir(app_name)
@@ -121,17 +132,27 @@ class LocalTransport(Transport):
             local_hash = compute_file_hash(local_path)
             resolved_remote = self._resolve_remote(remote_path)
 
-            # Hash-skip: same file already deployed
-            if not force and os.path.exists(resolved_remote):
-                if compute_file_hash(resolved_remote) == local_hash:
-                    return DeployResult(
-                        success=True,
-                        file_hash=local_hash,
-                        skipped=True,
-                    )
+            current_hash: Optional[str] = None
+            if os.path.exists(resolved_remote):
+                current_hash = compute_file_hash(resolved_remote)
 
-            # Back up whatever is currently deployed before overwriting
-            backup_path = self._make_backup(app_name, resolved_remote)
+            # Hash-skip: same file already deployed (unless --force)
+            if not force and current_hash == local_hash:
+                return DeployResult(
+                    success=True,
+                    file_hash=local_hash,
+                    skipped=True,
+                )
+
+            # Back up whatever is currently deployed before overwriting —
+            # but NOT if the current file is byte-identical to what we're
+            # about to write (e.g. `push --force` of an unchanged binary).
+            # Backing up an identical copy just pollutes the backup chain
+            # and makes subsequent `rollback` a no-op.
+            if current_hash is not None and current_hash != local_hash:
+                backup_path = self._make_backup(app_name, resolved_remote)
+            else:
+                backup_path = None
 
             # Copy the new file into place, preserving mode
             Path(resolved_remote).parent.mkdir(parents=True, exist_ok=True)
