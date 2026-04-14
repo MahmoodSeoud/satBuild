@@ -120,6 +120,20 @@ def format_relative_time(raw: Optional[str]) -> str:
     return dt.strftime("%Y-%m-%d")
 
 
+def format_absolute_time(raw: Optional[str]) -> str:
+    """`YYYY-MM-DD HH:MM:SS` in local time, or `-` if missing/unparseable."""
+    if not raw:
+        return "-"
+    try:
+        s = raw.replace("Z", "+00:00")
+        dt = datetime.fromisoformat(s)
+    except (TypeError, ValueError):
+        return raw
+    if dt.tzinfo is not None:
+        dt = dt.astimezone().replace(tzinfo=None)
+    return dt.strftime("%Y-%m-%d %H:%M:%S")
+
+
 # ---------------------------------------------------------------------------
 # Target header — `name · transport · endpoint`
 # ---------------------------------------------------------------------------
@@ -184,9 +198,7 @@ _STATE_STYLE = {
 }
 
 
-def render_status_table(
-    *, rows: Sequence[StatusRow], verbose: bool = False,
-) -> str:
+def render_status_table(*, rows: Sequence[StatusRow]) -> str:
     """Build the full status block: header + rows. Returns the whole string."""
 
     if not rows:
@@ -200,16 +212,16 @@ def render_status_table(
         8,
         max(len(r.git_prov or "") for r in rows),
     )
-    w_age = 8
+    w_age = 19  # "YYYY-MM-DD HH:MM:SS"
 
     lines = []
     # Header
     header = (
         f"  {'APP':<{w_app}}  "
-        f"{'HEALTH':<{w_state + 2}}  "
+        f"{'STATE':<{w_state + 2}}  "
         f"{'DEPLOYED':<{w_hash}}  "
         f"{'GIT':<{w_git}}  "
-        f"{'AGE':<{w_age}}"
+        f"{'TIMESTAMP':<{w_age}}"
     )
     lines.append(dim(header))
     ruler = (
@@ -231,7 +243,7 @@ def render_status_table(
 
         hash_rendered = click.style(f"{r.file_hash or '-':<{w_hash}}", fg="white")
         git_rendered = dim(f"{(r.git_prov or '-'):<{w_git}}")
-        age_raw = format_relative_time(r.age) if r.age else "-"
+        age_raw = format_absolute_time(r.age) if r.age else "-"
         age_rendered = dim(f"{age_raw:<{w_age}}")
         app_rendered = click.style(f"{r.app:<{w_app}}", bold=True)
 
@@ -239,7 +251,7 @@ def render_status_table(
             f"  {app_rendered}  {state_rendered}  {hash_rendered}  "
             f"{git_rendered}  {age_rendered}"
         )
-        if verbose and r.remote_path:
+        if r.remote_path:
             lines.append("  " + " " * w_app + "  " + dim(f"└ {r.remote_path}"))
 
     return "\n".join(lines)

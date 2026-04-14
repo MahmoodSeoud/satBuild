@@ -1056,7 +1056,11 @@ def status(config_path: Path | None, node_override: int | None):
                 if app_status:
                     hash_display = app_status.file_hash or "-"
                     remote_path = app_status.remote_path or ""
-                    state = "running" if app_status.running else "deployed"
+                    has_service = bool(apps.get(app_name, {}).get("service"))
+                    if not has_service:
+                        state = "deployed"
+                    else:
+                        state = "running" if app_status.running else "stopped"
                     git_prov = app_prov_map.get(hash_display)
                     age = last_deploy.timestamp if last_deploy else None
                 elif last_deploy and last_deploy.success:
