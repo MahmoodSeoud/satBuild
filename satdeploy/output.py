@@ -213,6 +213,7 @@ def render_status_table(*, rows: Sequence[StatusRow]) -> str:
         max(len(r.git_prov or "") for r in rows),
     )
     w_age = 19  # "YYYY-MM-DD HH:MM:SS"
+    w_path = max(4, max(len(r.remote_path or "-") for r in rows))
 
     lines = []
     # Header
@@ -221,7 +222,8 @@ def render_status_table(*, rows: Sequence[StatusRow]) -> str:
         f"{'STATE':<{w_state + 2}}  "
         f"{'DEPLOYED':<{w_hash}}  "
         f"{'GIT':<{w_git}}  "
-        f"{'TIMESTAMP':<{w_age}}"
+        f"{'TIMESTAMP':<{w_age}}  "
+        f"{'PATH':<{w_path}}"
     )
     lines.append(dim(header))
     ruler = (
@@ -230,7 +232,8 @@ def render_status_table(*, rows: Sequence[StatusRow]) -> str:
         + SYMBOLS["rule"] * (w_state + 2) + "  "
         + SYMBOLS["rule"] * w_hash + "  "
         + SYMBOLS["rule"] * w_git + "  "
-        + SYMBOLS["rule"] * w_age
+        + SYMBOLS["rule"] * w_age + "  "
+        + SYMBOLS["rule"] * w_path
     )
     lines.append(dim(ruler))
 
@@ -245,14 +248,13 @@ def render_status_table(*, rows: Sequence[StatusRow]) -> str:
         git_rendered = dim(f"{(r.git_prov or '-'):<{w_git}}")
         age_raw = format_absolute_time(r.age) if r.age else "-"
         age_rendered = dim(f"{age_raw:<{w_age}}")
+        path_rendered = dim(f"{(r.remote_path or '-'):<{w_path}}")
         app_rendered = click.style(f"{r.app:<{w_app}}", bold=True)
 
         lines.append(
             f"  {app_rendered}  {state_rendered}  {hash_rendered}  "
-            f"{git_rendered}  {age_rendered}"
+            f"{git_rendered}  {age_rendered}  {path_rendered}"
         )
-        if r.remote_path:
-            lines.append("  " + " " * w_app + "  " + dim(f"└ {r.remote_path}"))
 
     return "\n".join(lines)
 
