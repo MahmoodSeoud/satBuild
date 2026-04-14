@@ -36,7 +36,7 @@ SAVED_CONFIG_PATH = DEMO_ROOT / "saved-config.yaml"
 
 # Deploy target inside DEMO_TARGET — mirrors a real satellite path layout
 # so the demo output looks like a real deployment.
-DEMO_REMOTE_PATH = "/opt/demo/bin/test_app"
+DEMO_REMOTE_PATH = "/bin/test_app"
 
 DEMO_CONFIG = {
     "name": "demo",

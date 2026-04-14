@@ -16,7 +16,7 @@ Set Padding      20
 Hide
 Type `export PS1=$'\n%F{244}$%f '`
 Enter
-Type `export PATH="$HOME/.satdeploy/demo/target/opt/demo/bin:$PATH"`
+Type `export PATH="$HOME/.satdeploy/demo/target/bin:$PATH"`
 Enter
 Type "satdeploy demo stop --clean 2>/dev/null >/dev/null"
 Enter
