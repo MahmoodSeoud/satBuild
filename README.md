@@ -1,15 +1,17 @@
-```
+<div align="center">
+<pre>
   ███████╗ █████╗ ████████╗██████╗ ███████╗██████╗ ██╗      ██████╗ ██╗   ██╗
   ██╔════╝██╔══██╗╚══██╔══╝██╔══██╗██╔════╝██╔══██╗██║     ██╔═══██╗╚██╗ ██╔╝
   ███████╗███████║   ██║   ██║  ██║█████╗  ██████╔╝██║     ██║   ██║ ╚████╔╝
   ╚════██║██╔══██║   ██║   ██║  ██║██╔══╝  ██╔═══╝ ██║     ██║   ██║  ╚██╔╝
   ██████╔╝██║  ██║   ██║   ██████╔╝███████╗██║     ███████╗╚██████╔╝   ██║
   ╚═════╝ ╚═╝  ╚═╝   ╚═╝   ╚═════╝ ╚══════╝╚═╝     ╚══════╝ ╚═════╝    ╚═╝
-```
+</pre>
+</div>
 
-![satdeploy demo: run, push, run, rollback, run](demo/demo.gif)
+![satdeploy pushing and rolling back a local test app in 20 seconds](demo/demo.gif)
 
-> This is `satdeploy demo` against a local throwaway target, not a real satellite. `test_app` is a tiny shell script the demo ships so you can see the deploy land and unwind with your own eyes. Against real hardware the binary lives on the target (SSH or CSP), not the ground station, and you'd watch its effects there instead of running it next to `satdeploy`. Everything else in the gif (hashing, backups, git provenance, rollback) is the exact same code path as a production deploy.
+<sub><i><code>satdeploy demo</code> against a local throwaway target. Same hashing, backups, git provenance, and rollback code paths as a production deploy.</i></sub>
 
 We flew [DISCO-2](https://discosat.dk/v2_disco-2/), a 3U student CubeSat, and then spent weeks trying to recreate what was on it.
 
@@ -20,18 +22,18 @@ satdeploy is what we built so it doesn't happen again. Every deploy is versioned
 
 > DISCO-2 is a 3U student CubeSat from Aarhus University, SDU, and ITU Copenhagen, launched on [SpaceX Transporter-16](https://x.com/i/broadcasts/1kJzDMgwZAvKv) (March 30, 2026) to image Arctic glaciers from a 510 km sun-synchronous orbit. Coverage: [Danish Space News](https://danishspacenews.substack.com/p/disco-2-one-of-the-most-ambitious), [The Danish Dream](https://thedanishdream.com/danish-society/science/danish-students-launch-satellite-to-track-melting-arctic/), [project site](https://projects.au.dk/ausat/disco-2).
 
-> **Early stage, but heading to orbit.** We built satdeploy *after* DISCO-2 launched, so the current payload is flying without it. The next uplink window will push satdeploy to the DISCO-2 payload, and every deploy after that will be versioned, hash-verified, and rollback-able from the ground. Until then it runs on our flatsat, and we're looking for other satellite teams to try it before we trust it in orbit ourselves. Does this fit your workflow? What's missing? [Open an issue](https://github.com/MahmoodSeoud/satBuild/issues/new) or reach out.
+> **Early stage, but heading to orbit.** We built satdeploy *after* DISCO-2 launched, so the current payload is flying without it. The next uplink window will push satdeploy to the DISCO-2 payload, and every deploy after that will be versioned, hash-verified, and rollback-able from the ground. Right now it runs on our flatsat, and we're actively putting it in front of other satellite teams — the more hardware it sees on the bench, the more rough edges we find and fix together before anything flies. If you run a satellite program, we'd love to see it on your flatsat. [Open an issue](https://github.com/MahmoodSeoud/satBuild/issues/new) or reach out.
 
 ## Try it now
 
-Zero dependencies beyond Python and git.
+Zero dependencies on your laptop beyond Python and git.
 
 ```bash
 pipx install satdeploy   # or: pip install satdeploy
-satdeploy demo           
+satdeploy demo
 ```
 
-`satdeploy demo` sets up a throwaway git repo + local target directory and pre-installs `test_app` v1.0.0. Then try the real product loop:
+`satdeploy demo` sets up a throwaway git repo and a local target directory, then pre-installs `test_app` v1.0.0. Run the real product loop against it:
 
 ```bash
 satdeploy status              # See what's deployed
@@ -40,53 +42,7 @@ satdeploy rollback test_app   # Undo in one command, git tag carries through
 satdeploy demo stop           # Tear it down when you're done
 ```
 
-Real output:
-
-```
-$ satdeploy status
-  demo · local · /Users/you/.satdeploy/demo/target
-
-  APP       HEALTH         DEPLOYED  GIT            AGE
-  ────────  ─────────────  ────────  ─────────────  ────────
-  test_app  ● running      32c0702b  main@0c7e8fb2  just now
-
-$ satdeploy push test_app
-
-  ● Deploying test_app → demo
-
-     32c0702b  main@0c7e8fb2        (current)
-     5f3413a2  main@1f1750a6        (new)
-
-  ✓  backup      20260414-124916-32c0702b.bak
-  ✓  upload      0.1 KB · sha256 5f3413a2
-  ✓  verify      checksum ok
-  ·  service     no service configured, skipped
-
-  Deployed in 0.03s.  Rollback with: satdeploy rollback test_app
-
-$ satdeploy list test_app
-  test_app  · 2 versions
-
-     HASH      GIT            TIMESTAMP            STATUS
-   · 32c0702b  main@0c7e8fb2  2026-04-14 12:49:16  backup
-   → 5f3413a2  main@1f1750a6  2026-04-14 12:49:16  deployed
-
-$ satdeploy rollback test_app
-
-  → Rolling back test_app on demo
-
-     5f3413a2  →  32c0702b
-
-  ● Rolled back test_app to 32c0702b
-
-$ satdeploy status
-  demo · local · /Users/you/.satdeploy/demo/target
-
-  APP       HEALTH         DEPLOYED  GIT            AGE
-  ────────  ─────────────  ────────  ─────────────  ────────
-  test_app  ● running      32c0702b  main@0c7e8fb2  just now
-```
-
+The demo runs against a directory on your own machine instead of a satellite, so `test_app` (a small shell script the demo ships) executes right there on your laptop. Against real hardware, the binary lives on the target and you watch its effects there.
 
 ## Deploy to real hardware
 
