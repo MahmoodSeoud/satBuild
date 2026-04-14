@@ -220,7 +220,7 @@ def render_status_table(*, rows: Sequence[StatusRow]) -> str:
     header = (
         f"  {'APP':<{w_app}}  "
         f"{'STATE':<{w_state + 2}}  "
-        f"{'DEPLOYED':<{w_hash}}  "
+        f"{'HASH':<{w_hash}}  "
         f"{'GIT':<{w_git}}  "
         f"{'TIMESTAMP':<{w_age}}  "
         f"{'PATH':<{w_path}}"
