@@ -213,19 +213,26 @@ class LocalTransport(Transport):
             )
 
     def get_status(self) -> dict[str, AppStatus]:
+        """Return status only for apps whose file actually exists on the target.
+
+        Matches CSP/SSH semantics: get_status() reports what's really
+        there, not what the config says should be there. An app that's
+        configured but has never been pushed is absent from the result,
+        and the CLI status command renders it as "not deployed" via the
+        history-fallback path.
+        """
         result: dict[str, AppStatus] = {}
         for app_name, cfg in self._apps.items():
             remote_path = cfg.get("remote", "")
-            resolved = self._resolve_remote(remote_path) if remote_path else ""
-
-            file_hash: Optional[str] = None
-            if resolved and os.path.exists(resolved):
-                file_hash = compute_file_hash(resolved)
-
+            if not remote_path:
+                continue
+            resolved = self._resolve_remote(remote_path)
+            if not os.path.exists(resolved):
+                continue
             result[app_name] = AppStatus(
                 app_name=app_name,
-                running=bool(file_hash),
-                file_hash=file_hash,
+                running=True,  # file on disk == "running" for local transport
+                file_hash=compute_file_hash(resolved),
                 remote_path=remote_path,
             )
         return result

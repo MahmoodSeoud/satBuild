@@ -294,10 +294,26 @@ class Config:
 
     @property
     def backup_dir(self) -> str:
-        """Get backup directory path."""
+        """Get backup directory path.
+
+        For SSH/CSP, this is a path on the remote target so the default
+        `/opt/satdeploy/backups` is a reasonable Linux filesystem choice.
+        For the `local` transport the backup dir lives on the user's own
+        machine, and defaulting to `/opt/...` requires root to create —
+        so we default to `{target_dir}/.satdeploy-backups` instead, which
+        is guaranteed to be co-located with the target and therefore
+        writable by whoever can write to the target in the first place.
+        """
         if self._data is None:
             return "/opt/satdeploy/backups"
-        return self._data.get("backup_dir", "/opt/satdeploy/backups")
+        explicit = self._data.get("backup_dir")
+        if explicit:
+            return explicit
+        if self._data.get("transport") == "local":
+            target_dir = self._data.get("target_dir", "")
+            if target_dir:
+                return str(Path(target_dir).expanduser() / ".satdeploy-backups")
+        return "/opt/satdeploy/backups"
 
     @property
     def max_backups(self) -> int:
