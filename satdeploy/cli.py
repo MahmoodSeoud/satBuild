@@ -8,6 +8,7 @@ from pathlib import Path
 import click
 from click.shell_completion import CompletionItem
 
+from satdeploy import __version__
 from satdeploy.config import DEFAULT_CONFIG_DIR, DEFAULT_CONFIG_FILE, Config, ModuleConfig, AppConfig
 from satdeploy.dependencies import DependencyResolver
 from satdeploy.deployer import Deployer
@@ -429,6 +430,11 @@ def _install_completion() -> bool:
 
 
 @click.group(cls=ColoredGroup)
+@click.version_option(
+    version=__version__,
+    prog_name="satdeploy",
+    message="%(prog)s %(version)s",
+)
 def main():
     """Deploy files to embedded Linux targets."""
     pass
@@ -1541,6 +1547,8 @@ def config(config_path: Path | None):
         click.echo(f"  zmq_endpoint:  {module.zmq_endpoint}")
         click.echo(f"  agent_node:    {module.agent_node}")
         click.echo(f"  ground_node:   {module.ground_node}")
+    elif module.transport == "local":
+        click.echo(f"  target_dir:    {module.target_dir}")
     click.echo(f"  backup_dir:    {cfg.backup_dir}")
 
     apps = cfg.apps
@@ -1585,7 +1593,9 @@ def logs(app: str, lines: int, config_path: Path | None, node_override: int | No
     service = app_config.service
     if not service:
         raise SatDeployError(
-            f"App '{app}' is a library and has no service. Cannot show logs."
+            f"App '{app}' has no systemd service configured (service: null). "
+            f"Cannot show logs. If this app should run as a service, add a "
+            f"`service:` field to its config entry."
         )
 
     module_config = config.get_target()
