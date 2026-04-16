@@ -1,0 +1,14 @@
+[build-system]
+requires = ["meson-python>=0.13", "meson>=0.61.2"]
+build-backend = "mesonpy"
+
+[project]
+name = "libcsp-py3"
+version = "2.2.0"
+description = "Python bindings for libcsp (Cubesat Space Protocol)"
+requires-python = ">=3.8"
+license = {text = "LGPL-2.1"}
+authors = [{name = "Space Inventor ApS"}]
+
+[project.urls]
+Homepage = "https://github.com/spaceinventor/libcsp"
