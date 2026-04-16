@@ -1,9 +1,8 @@
-"""Tests for the CSP transport implementation."""
+"""Tests for the CSP transport implementation using libcsp."""
 
-from unittest.mock import MagicMock, patch, call
+from unittest.mock import MagicMock, patch
 import struct
 import pytest
-import zmq as real_zmq
 
 from satdeploy.transport.base import (
     Transport,
@@ -12,65 +11,25 @@ from satdeploy.transport.base import (
     AppStatus,
     BackupInfo,
 )
-from satdeploy.transport.csp import CSPTransport, CSP_HEADER_SIZE
+from satdeploy.transport.csp import CSPTransport, CSP_DEPLOY_PORT
 from satdeploy.csp.proto import DeployCommand, DeployRequest, DeployResponse
 
 
 @pytest.fixture
-def mock_zmq():
-    """Create ZMQ mock that preserves exception classes."""
-    with patch("satdeploy.transport.csp.zmq") as mock:
-        # Preserve real exception classes and constants
-        mock.Again = real_zmq.Again
-        mock.ZMQError = real_zmq.ZMQError
-        mock.PUB = real_zmq.PUB
-        mock.SUB = real_zmq.SUB
-        mock.SUBSCRIBE = real_zmq.SUBSCRIBE
-        mock.LINGER = real_zmq.LINGER
-        mock.RCVTIMEO = real_zmq.RCVTIMEO
-        mock.SNDTIMEO = real_zmq.SNDTIMEO
-        mock.NOBLOCK = real_zmq.NOBLOCK
+def mock_libcsp():
+    """Mock libcsp_py3 module."""
+    with patch("satdeploy.transport.csp.libcsp") as mock:
+        # Provide constants
+        mock.CSP_PRIO_NORM = 2
+        mock.CSP_O_NONE = 0
+        mock.CSP_O_RDP = 1
+        mock.CSP_SO_RDPREQ = 0x04
+        mock.CSP_SO_CONN_LESS = 0x40
 
-        # Setup default context with separate pub/sub sockets
-        mock_context = MagicMock()
-        mock_pub = MagicMock()
-        mock_sub = MagicMock()
-
-        def socket_factory(socket_type):
-            if socket_type == real_zmq.PUB:
-                return mock_pub
-            elif socket_type == real_zmq.SUB:
-                return mock_sub
-            return MagicMock()
-
-        mock.Context.return_value = mock_context
-        mock_context.socket.side_effect = socket_factory
-
-        # Store references for tests
-        mock._context = mock_context
-        mock._pub = mock_pub
-        mock._sub = mock_sub
+        # Error exception class
+        mock.Error = type("Error", (Exception,), {})
 
         yield mock
-
-
-def make_csp_response(response: DeployResponse) -> bytes:
-    """Wrap a protobuf response with a CSP v2 header for testing.
-
-    Builds a realistic header with sport=20 (CSP_DEPLOY_PORT) so the
-    CSPTransport's port filter accepts it.
-    """
-    import struct
-    # pri=2, dst=40, src=5425, dport=0, sport=20 (deploy port)
-    id2 = (
-        (2 & 0x3) << 46 |
-        (40 & 0x3FFF) << 32 |
-        (5425 & 0x3FFF) << 18 |
-        (0 & 0x3F) << 12 |
-        (20 & 0x3F) << 6
-    )
-    header = struct.pack(">Q", id2 << 16)[:6]
-    return header + response.SerializeToString()
 
 
 @pytest.fixture
@@ -78,6 +37,21 @@ def mock_dtp():
     """Create DTPServer mock."""
     with patch("satdeploy.transport.csp.DTPServer") as mock:
         yield mock
+
+
+def make_transaction_response(mock_libcsp, response: DeployResponse):
+    """Configure mock_libcsp.transaction to return the serialized response.
+
+    The transaction() mock fills the inbuf (arg index 5) with serialized
+    protobuf data and returns the length.
+    """
+    serialized = response.SerializeToString()
+
+    def transaction_side_effect(prio, dest, port, timeout, outbuf, inbuf, *args):
+        inbuf[:len(serialized)] = serialized
+        return len(serialized)
+
+    mock_libcsp.transaction.side_effect = transaction_side_effect
 
 
 class TestCSPTransportInterface:
@@ -116,10 +90,11 @@ class TestCSPTransportInterface:
 
 
 class TestCSPTransportConnection:
-    """Test CSP connection handling."""
+    """Test CSP connection handling via libcsp."""
 
-    def test_connect_creates_pub_sub_sockets(self, mock_zmq):
-        """connect() creates PUB and SUB sockets through zmqproxy."""
+    @patch("satdeploy.transport.csp._csp_initialized", False)
+    def test_connect_initializes_libcsp(self, mock_libcsp):
+        """connect() calls libcsp.init(), zmqhub_init(), rtable_load(), route_start_task()."""
         transport = CSPTransport(
             zmq_endpoint="tcp://localhost:6000",
             agent_node=5424,
@@ -128,14 +103,14 @@ class TestCSPTransportConnection:
         )
         transport.connect()
 
-        mock_zmq.Context.assert_called_once()
-        # Should create both PUB and SUB sockets
-        assert mock_zmq._context.socket.call_count == 2
-        mock_zmq._pub.connect.assert_called_with("tcp://localhost:9600")
-        mock_zmq._sub.connect.assert_called_with("tcp://localhost:9601")
+        mock_libcsp.init.assert_called_once_with("satdeploy", "ground", "0.1")
+        mock_libcsp.zmqhub_init.assert_called_once_with(40, "localhost", True)
+        mock_libcsp.rtable_load.assert_called_once_with("0/0 ZMQHUB")
+        mock_libcsp.route_start_task.assert_called_once()
 
-    def test_connect_sets_sub_filters(self, mock_zmq):
-        """connect() subscribes to packets for our ground node."""
+    @patch("satdeploy.transport.csp._csp_initialized", True)
+    def test_connect_skips_reinit(self, mock_libcsp):
+        """connect() skips init when already initialized."""
         transport = CSPTransport(
             zmq_endpoint="tcp://localhost:6000",
             agent_node=5424,
@@ -144,33 +119,29 @@ class TestCSPTransportConnection:
         )
         transport.connect()
 
-        # Should subscribe for all 4 priority levels
-        subscribe_calls = [
-            c for c in mock_zmq._sub.setsockopt.call_args_list
-            if c[0][0] == real_zmq.SUBSCRIBE
-        ]
-        assert len(subscribe_calls) == 4
+        mock_libcsp.init.assert_not_called()
+        assert transport._connected is True
 
-        # Verify filter format: big-endian uint16 = (priority << 14) | ground_node
-        for pri in range(4):
-            expected_filter = struct.pack(">H", (pri << 14) | 40)
-            assert call(real_zmq.SUBSCRIBE, expected_filter) in mock_zmq._sub.setsockopt.call_args_list
-
-    def test_disconnect_closes_both_sockets(self, mock_zmq):
-        """disconnect() closes PUB and SUB with linger=0."""
+    def test_disconnect_stops_dtp_server(self, mock_libcsp):
+        """disconnect() stops DTP server and resets connected state."""
         transport = CSPTransport(
             zmq_endpoint="tcp://localhost:6000",
             agent_node=5424,
             ground_node=40,
             backup_dir="/backups",
         )
-        transport.connect()
+        mock_dtp_server = MagicMock()
+        transport._dtp_server = mock_dtp_server
+        transport._connected = True
+
         transport.disconnect()
 
-        mock_zmq._pub.close.assert_called_with(linger=0)
-        mock_zmq._sub.close.assert_called_with(linger=0)
+        mock_dtp_server.stop.assert_called_once()
+        assert transport._connected is False
+        assert transport._dtp_server is None
 
-    def test_context_manager(self, mock_zmq):
+    @patch("satdeploy.transport.csp._csp_initialized", True)
+    def test_context_manager(self, mock_libcsp):
         """CSPTransport works as context manager."""
         transport = CSPTransport(
             zmq_endpoint="tcp://localhost:6000",
@@ -180,70 +151,24 @@ class TestCSPTransportConnection:
         )
 
         with transport:
-            pass
+            assert transport._connected is True
 
-        mock_zmq._pub.close.assert_called_with(linger=0)
-        mock_zmq._sub.close.assert_called_with(linger=0)
-
-
-class TestCSPV2Header:
-    """Test CSP v2 header encoding/decoding."""
-
-    def test_header_is_6_bytes(self):
-        """CSP v2 header is 6 bytes."""
-        transport = CSPTransport(
-            zmq_endpoint="localhost",
-            agent_node=5425,
-            ground_node=40,
-            backup_dir="/backups",
-        )
-        header = transport._build_csp_header(dest=5425, dest_port=20)
-        assert len(header) == 6
-
-    def test_header_roundtrip(self):
-        """Build and parse produces same values."""
-        transport = CSPTransport(
-            zmq_endpoint="localhost",
-            agent_node=5425,
-            ground_node=40,
-            backup_dir="/backups",
-        )
-        header = transport._build_csp_header(dest=5425, dest_port=20, src_port=15)
-        parsed = CSPTransport._parse_csp_header(header)
-
-        assert parsed["dst"] == 5425
-        assert parsed["src"] == 40
-        assert parsed["dport"] == 20
-        assert parsed["sport"] == 15
-        assert parsed["pri"] == 2  # Normal priority
-
-    def test_header_14bit_addresses(self):
-        """CSP v2 supports 14-bit node addresses (up to 16383)."""
-        transport = CSPTransport(
-            zmq_endpoint="localhost",
-            agent_node=10000,
-            ground_node=8000,
-            backup_dir="/backups",
-        )
-        header = transport._build_csp_header(dest=10000, dest_port=20)
-        parsed = CSPTransport._parse_csp_header(header)
-
-        assert parsed["dst"] == 10000
-        assert parsed["src"] == 8000
+        assert transport._connected is False
 
 
 class TestCSPTransportDeploy:
     """Test CSP deployment operations."""
 
-    def test_deploy_sends_command(self, mock_zmq, mock_dtp, tmp_path):
-        """deploy() sends CMD_DEPLOY to agent."""
+    @patch("satdeploy.transport.csp._csp_initialized", True)
+    def test_deploy_sends_command(self, mock_libcsp, mock_dtp, tmp_path):
+        """deploy() sends CMD_DEPLOY via libcsp.transaction()."""
         binary = tmp_path / "test_app"
         binary.write_bytes(b"test binary content")
 
         response = DeployResponse()
         response.success = True
         response.backup_path = "/backups/app/123.bak"
-        mock_zmq._sub.recv.return_value = make_csp_response(response)
+        make_transaction_response(mock_libcsp, response)
 
         transport = CSPTransport(
             zmq_endpoint="tcp://localhost:6000",
@@ -264,11 +189,12 @@ class TestCSPTransportDeploy:
 
         assert result.success is True
         assert result.backup_path == "/backups/app/123.bak"
-        mock_zmq._pub.send.assert_called_once()
+        mock_libcsp.transaction.assert_called_once()
         mock_dtp.return_value.start.assert_called_once()
         mock_dtp.return_value.stop.assert_called_once()
 
-    def test_deploy_sets_file_mode(self, mock_zmq, mock_dtp, tmp_path):
+    @patch("satdeploy.transport.csp._csp_initialized", True)
+    def test_deploy_sets_file_mode(self, mock_libcsp, mock_dtp, tmp_path):
         """deploy() sets file_mode from source file in the CSP request."""
         binary = tmp_path / "test_app"
         binary.write_bytes(b"test binary content")
@@ -276,7 +202,7 @@ class TestCSPTransportDeploy:
 
         response = DeployResponse()
         response.success = True
-        mock_zmq._sub.recv.return_value = make_csp_response(response)
+        make_transaction_response(mock_libcsp, response)
 
         transport = CSPTransport(
             zmq_endpoint="tcp://localhost:6000",
@@ -293,15 +219,17 @@ class TestCSPTransportDeploy:
         )
 
         assert result.success is True
-        # Verify the sent packet contains file_mode
-        sent_data = mock_zmq._pub.send.call_args[0][0]
-        # Parse the protobuf payload (skip 6-byte CSP header)
+        # Verify the sent request contains file_mode by inspecting the
+        # outbuf that was passed to transaction()
+        call_args = mock_libcsp.transaction.call_args
+        outbuf = call_args[0][4]  # positional arg index 4 is outbuf
         request = DeployRequest()
-        request.ParseFromString(sent_data[CSP_HEADER_SIZE:])
+        request.ParseFromString(bytes(outbuf))
         import os, stat
         assert request.file_mode == stat.S_IMODE(os.stat(str(binary)).st_mode)
 
-    def test_deploy_handles_failure(self, mock_zmq, mock_dtp, tmp_path):
+    @patch("satdeploy.transport.csp._csp_initialized", True)
+    def test_deploy_handles_failure(self, mock_libcsp, mock_dtp, tmp_path):
         """deploy() handles agent failure response."""
         binary = tmp_path / "test_app"
         binary.write_bytes(b"test binary content")
@@ -310,7 +238,7 @@ class TestCSPTransportDeploy:
         response.success = False
         response.error_code = 6
         response.error_message = "Checksum verification failed"
-        mock_zmq._sub.recv.return_value = make_csp_response(response)
+        make_transaction_response(mock_libcsp, response)
 
         transport = CSPTransport(
             zmq_endpoint="tcp://localhost:6000",
@@ -334,11 +262,12 @@ class TestCSPTransportDeploy:
 class TestCSPTransportRollback:
     """Test CSP rollback operations."""
 
-    def test_rollback_sends_command(self, mock_zmq):
-        """rollback() sends CMD_ROLLBACK to agent."""
+    @patch("satdeploy.transport.csp._csp_initialized", True)
+    def test_rollback_sends_command(self, mock_libcsp):
+        """rollback() sends CMD_ROLLBACK via libcsp.transaction()."""
         response = DeployResponse()
         response.success = True
-        mock_zmq._sub.recv.return_value = make_csp_response(response)
+        make_transaction_response(mock_libcsp, response)
 
         transport = CSPTransport(
             zmq_endpoint="tcp://localhost:6000",
@@ -351,13 +280,14 @@ class TestCSPTransportRollback:
         result = transport.rollback(app_name="dipp")
 
         assert result.success is True
-        mock_zmq._pub.send.assert_called_once()
+        mock_libcsp.transaction.assert_called_once()
 
 
 class TestCSPTransportStatus:
     """Test CSP status queries."""
 
-    def test_get_status_queries_agent(self, mock_zmq):
+    @patch("satdeploy.transport.csp._csp_initialized", True)
+    def test_get_status_queries_agent(self, mock_libcsp):
         """get_status() sends CMD_STATUS and parses response."""
         response = DeployResponse()
         response.success = True
@@ -366,7 +296,7 @@ class TestCSPTransportStatus:
         app_status.running = True
         app_status.file_hash = "abc12345"
         app_status.remote_path = "/usr/bin/dipp"
-        mock_zmq._sub.recv.return_value = make_csp_response(response)
+        make_transaction_response(mock_libcsp, response)
 
         transport = CSPTransport(
             zmq_endpoint="tcp://localhost:6000",
@@ -386,7 +316,8 @@ class TestCSPTransportStatus:
 class TestCSPTransportListBackups:
     """Test CSP backup listing."""
 
-    def test_list_backups_queries_agent(self, mock_zmq):
+    @patch("satdeploy.transport.csp._csp_initialized", True)
+    def test_list_backups_queries_agent(self, mock_libcsp):
         """list_backups() sends CMD_LIST_VERSIONS and parses response."""
         response = DeployResponse()
         response.success = True
@@ -395,7 +326,7 @@ class TestCSPTransportListBackups:
         backup.timestamp = "2025-01-15 14:30:22"
         backup.hash = "abc12345"
         backup.path = "/backups/dipp/20250115-143022-abc12345.bak"
-        mock_zmq._sub.recv.return_value = make_csp_response(response)
+        make_transaction_response(mock_libcsp, response)
 
         transport = CSPTransport(
             zmq_endpoint="tcp://localhost:6000",
@@ -415,12 +346,13 @@ class TestCSPTransportListBackups:
 class TestCSPTransportLogs:
     """Test CSP log fetching."""
 
-    def test_get_logs(self, mock_zmq):
+    @patch("satdeploy.transport.csp._csp_initialized", True)
+    def test_get_logs(self, mock_libcsp):
         """get_logs() sends CMD_LOGS and returns log output."""
         response = DeployResponse()
         response.success = True
         response.log_output = "Mar 22 service started"
-        mock_zmq._sub.recv.return_value = make_csp_response(response)
+        make_transaction_response(mock_libcsp, response)
 
         transport = CSPTransport(
             zmq_endpoint="tcp://localhost:6000",
@@ -433,3 +365,237 @@ class TestCSPTransportLogs:
         log_output = transport.get_logs("dipp", "dipp.service", lines=50)
 
         assert log_output == "Mar 22 service started"
+
+
+class TestCSPTransportErrorPaths:
+    """Test error and edge case paths."""
+
+    def test_connect_raises_when_libcsp_none(self):
+        """connect() raises TransportError when libcsp is not installed."""
+        transport = CSPTransport(
+            zmq_endpoint="tcp://localhost:6000",
+            agent_node=5424,
+            ground_node=40,
+            backup_dir="/backups",
+        )
+        with patch("satdeploy.transport.csp.libcsp", None):
+            with pytest.raises(TransportError, match="requires libcsp_py3"):
+                transport.connect()
+
+    def test_send_request_retries_on_error(self, mock_libcsp):
+        """_send_request retries and raises TransportError after exhausting retries."""
+        mock_libcsp.Error = type("Error", (Exception,), {})
+        mock_libcsp.transaction.side_effect = mock_libcsp.Error("timeout")
+
+        transport = CSPTransport(
+            zmq_endpoint="tcp://localhost:6000",
+            agent_node=5424,
+            ground_node=40,
+            backup_dir="/backups",
+        )
+        transport._connected = True
+
+        request = DeployRequest()
+        request.command = DeployCommand.CMD_STATUS
+
+        with pytest.raises(TransportError, match="CSP transaction failed"):
+            transport._send_request(request, retries=2)
+
+        # Should have tried 3 times (1 + 2 retries)
+        assert mock_libcsp.transaction.call_count == 3
+
+    def test_send_request_succeeds_on_retry(self, mock_libcsp):
+        """_send_request succeeds if a retry works after initial failure."""
+        mock_libcsp.Error = type("Error", (Exception,), {})
+
+        response = DeployResponse()
+        response.success = True
+        serialized = response.SerializeToString()
+
+        call_count = [0]
+        def side_effect(prio, dest, port, timeout, outbuf, inbuf, *args):
+            call_count[0] += 1
+            if call_count[0] == 1:
+                raise mock_libcsp.Error("transient")
+            inbuf[:len(serialized)] = serialized
+            return len(serialized)
+
+        mock_libcsp.transaction.side_effect = side_effect
+
+        transport = CSPTransport(
+            zmq_endpoint="tcp://localhost:6000",
+            agent_node=5424,
+            ground_node=40,
+            backup_dir="/backups",
+        )
+        transport._connected = True
+
+        request = DeployRequest()
+        request.command = DeployCommand.CMD_STATUS
+
+        result = transport._send_request(request, retries=1)
+        assert result.success is True
+        assert call_count[0] == 2
+
+    def test_not_connected_guards(self, mock_libcsp):
+        """Methods return safe defaults when not connected."""
+        transport = CSPTransport(
+            zmq_endpoint="tcp://localhost:6000",
+            agent_node=5424,
+            ground_node=40,
+            backup_dir="/backups",
+        )
+        # Not connected — _connected is False by default
+
+        assert transport.get_status() == {}
+        assert transport.list_backups("app") == []
+        assert transport.get_logs("app", "svc") is None
+
+        result = transport.rollback(app_name="app")
+        assert result.success is False
+        assert "Not connected" in result.error_message
+
+    @patch("satdeploy.transport.csp._csp_initialized", True)
+    def test_deploy_not_connected(self, mock_libcsp, tmp_path):
+        """deploy() returns failure when not connected."""
+        binary = tmp_path / "test_app"
+        binary.write_bytes(b"content")
+
+        transport = CSPTransport(
+            zmq_endpoint="tcp://localhost:6000",
+            agent_node=5424,
+            ground_node=40,
+            backup_dir="/backups",
+        )
+        # Don't call connect()
+
+        result = transport.deploy(
+            app_name="app",
+            local_path=str(binary),
+            remote_path="/usr/bin/app",
+        )
+        assert result.success is False
+        assert "Not connected" in result.error_message
+
+
+class TestDTPServer:
+    """Test DTP server functionality."""
+
+    def test_dtp_meta_response_format(self):
+        """dtp_meta_resp_t is 8 bytes: two little-endian uint32s."""
+        from satdeploy.csp.dtp_server import DTPServer
+        with patch("satdeploy.csp.dtp_server.libcsp"):
+            server = DTPServer(
+                local_path="/tmp/test",
+                payload_id=1,
+                node_address=40,
+                mtu=256,
+            )
+            server._file_size = 1024
+            resp = server._build_dtp_meta_response(512)
+
+            size_in_bytes, total_size = struct.unpack("<II", resp)
+            assert size_in_bytes == 512
+            assert total_size == 1024
+
+    def test_start_stop_lifecycle(self):
+        """DTP server can be started and stopped."""
+        from satdeploy.csp.dtp_server import DTPServer
+        with patch("satdeploy.csp.dtp_server.libcsp") as mock_csp:
+            mock_csp.CSP_SO_RDPREQ = 0x04
+            mock_csp.accept.return_value = None  # no connections
+
+            server = DTPServer(
+                local_path="/dev/null",
+                payload_id=1,
+                node_address=40,
+                mtu=256,
+            )
+            server.start()
+            assert server._running is True
+
+            server.stop()
+            assert server._running is False
+            assert server._server_thread is None
+
+    def test_handle_dtp_request_sends_metadata_and_data(self):
+        """_handle_dtp_request sends metadata response and data packets."""
+        from satdeploy.csp.dtp_server import DTPServer
+        with patch("satdeploy.csp.dtp_server.libcsp") as mock_csp:
+            mock_csp.CSP_O_NONE = 0
+            mock_csp.CSP_PRIO_NORM = 2
+            mock_csp.Error = type("Error", (Exception,), {})
+
+            server = DTPServer(
+                local_path="/tmp/test",
+                payload_id=1,
+                node_address=40,
+                mtu=256,
+            )
+            server._file_data = b"A" * 100
+            server._file_size = 100
+            server._running = True
+
+            # Build a minimal dtp_meta_req_t (16 bytes)
+            req_data = struct.pack("<IBBBBI HH",
+                                   1000000, 0, 1, 0, 0, 42, 256, 0)
+
+            mock_conn = MagicMock()
+            mock_packet = MagicMock()
+
+            server._handle_dtp_request(req_data, 5425, mock_conn, mock_packet)
+
+            # Should have sent metadata reply
+            mock_csp.buffer_get.assert_called()
+            mock_csp.sendto_reply.assert_called_once()
+            # Should have sent data packets via sendto
+            assert mock_csp.sendto.call_count > 0
+
+    def test_handle_dtp_request_short_request_ignored(self):
+        """_handle_dtp_request ignores requests shorter than 16 bytes."""
+        from satdeploy.csp.dtp_server import DTPServer
+        with patch("satdeploy.csp.dtp_server.libcsp") as mock_csp:
+            server = DTPServer(
+                local_path="/tmp/test",
+                payload_id=1,
+                node_address=40,
+                mtu=256,
+            )
+            server._file_size = 100
+
+            server._handle_dtp_request(b"\x00" * 10, 5425, MagicMock(), MagicMock())
+
+            mock_csp.buffer_get.assert_not_called()
+
+    def test_send_data_packets_frees_buffer_on_error(self):
+        """_send_data_packets frees CSP buffer when sendto fails."""
+        from satdeploy.csp.dtp_server import DTPServer
+        with patch("satdeploy.csp.dtp_server.libcsp") as mock_csp:
+            mock_csp.CSP_O_NONE = 0
+            mock_csp.CSP_PRIO_NORM = 2
+            mock_csp.Error = type("Error", (Exception,), {})
+
+            mock_buf = MagicMock()
+            mock_csp.buffer_get.return_value = mock_buf
+            # sendto fails on first call, then succeeds
+            call_count = [0]
+            def sendto_side(*args):
+                call_count[0] += 1
+                if call_count[0] == 1:
+                    raise mock_csp.Error("congestion")
+            mock_csp.sendto.side_effect = sendto_side
+
+            server = DTPServer(
+                local_path="/tmp/test",
+                payload_id=1,
+                node_address=40,
+                mtu=256,
+            )
+            server._file_data = b"A" * 10
+            server._file_size = 10
+            server._running = True
+
+            server._send_data_packets(5425, 42, 256)
+
+            # Buffer should have been freed on the failed attempt
+            mock_csp.buffer_free.assert_called_once_with(mock_buf)
