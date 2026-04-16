@@ -174,3 +174,41 @@ and any rollback events. Consider PDF output via weasyprint or markdown for simp
 
 **Depends on:** Phase 1 community launch validation. Only build if a funded startup
 specifically asks for compliance/audit documentation.
+
+## aarch64 Wheel Builds for libcsp-py3
+
+**What:** Add `cp39-manylinux_x86_64` → also build `cp3{9,10,11,12}-manylinux_aarch64`
+wheels in the libcsp-py3-publish workflow.
+
+**Why:** ARM Linux users (Raspberry Pi, Jetson, other embedded dev boards) can't
+`pip install satdeploy[csp]` without building from source. Satellite ground stations
+sometimes run on ARM SBCs.
+
+**Context:** cibuildwheel supports aarch64 via QEMU emulation on GitHub Actions
+(`CIBW_ARCHS_LINUX: "x86_64 aarch64"`). Requires adding `- uses: docker/setup-qemu-action@v3`
+before the build step. Build time increases ~2x due to emulation.
+
+**Effort:** S (human: ~15 min / CC: ~5 min)
+
+**Priority:** P3 -- build when an ARM user reports the issue
+
+**Depends on:** libcsp-py3 wheels working on x86_64 first.
+
+## TestPyPI Dry-Run for libcsp-py3
+
+**What:** Add a TestPyPI publish option to the libcsp-py3-publish workflow, triggered
+by `workflow_dispatch` with an input toggle.
+
+**Why:** First publish to real PyPI is irreversible (you can't overwrite a version).
+A TestPyPI step catches metadata issues (wrong name, missing classifiers, bad
+description rendering) before they're permanent.
+
+**Context:** Add a `workflow_dispatch` input: `publish_target` with options
+`testpypi` (default) and `pypi`. Use `repository-url: https://test.pypi.org/legacy/`
+for TestPyPI. Configure a separate trusted publisher on test.pypi.org for the repo.
+
+**Effort:** S (human: ~15 min / CC: ~5 min)
+
+**Priority:** P2 -- do before the first real publish
+
+**Depends on:** PyPI trusted publisher configured for the repo.
