@@ -24,6 +24,7 @@ class DeploymentRecord:
     error_message: Optional[str] = None
     service_hash: Optional[str] = None
     vmem_cleared: bool = False
+    transport: Optional[str] = None  # "ssh" or "csp"
     id: Optional[int] = None
 
 
@@ -38,6 +39,10 @@ class History:
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
 
         conn = sqlite3.connect(self._db_path)
+
+        # WAL mode + busy timeout for concurrent access with satdeploy-apm
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA busy_timeout=5000")
 
         # Check if table exists
         cursor = conn.execute(
@@ -65,7 +70,8 @@ class History:
                     error_message TEXT,
                     service_hash TEXT,
                     vmem_cleared INTEGER NOT NULL DEFAULT 0,
-                    provenance_source TEXT
+                    provenance_source TEXT,
+                    transport TEXT
                 )
             """)
 
@@ -100,6 +106,10 @@ class History:
         if "provenance_source" not in columns:
             conn.execute("ALTER TABLE deployments ADD COLUMN provenance_source TEXT")
 
+        # Add transport column if missing (distinguishes SSH vs CSP deploys)
+        if "transport" not in columns:
+            conn.execute("ALTER TABLE deployments ADD COLUMN transport TEXT")
+
     def record(self, record: DeploymentRecord) -> None:
         """Record a deployment operation.
 
@@ -109,11 +119,15 @@ class History:
         timestamp = record.timestamp or datetime.now().isoformat()
 
         conn = sqlite3.connect(self._db_path)
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA busy_timeout=5000")
         conn.execute(
             """
             INSERT INTO deployments
-            (module, app, timestamp, git_hash, file_hash, remote_path, backup_path, action, success, error_message, service_hash, vmem_cleared, provenance_source)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            (module, app, timestamp, git_hash, file_hash, remote_path, backup_path,
+             action, success, error_message, service_hash, vmem_cleared,
+             provenance_source, transport)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 record.module,
@@ -129,6 +143,7 @@ class History:
                 record.service_hash,
                 1 if record.vmem_cleared else 0,
                 record.provenance_source,
+                "ssh",  # Python CLI always deploys via SSH
             ),
         )
         conn.commit()
@@ -241,6 +256,7 @@ class History:
 
     def _row_to_record(self, row: sqlite3.Row) -> DeploymentRecord:
         """Convert a database row to a DeploymentRecord."""
+        keys = row.keys()
         return DeploymentRecord(
             id=row["id"],
             module=row["module"],
@@ -255,5 +271,6 @@ class History:
             error_message=row["error_message"],
             service_hash=row["service_hash"],
             vmem_cleared=bool(row["vmem_cleared"]),
-            provenance_source=row["provenance_source"] if "provenance_source" in row.keys() else None,
+            provenance_source=row["provenance_source"] if "provenance_source" in keys else None,
+            transport=row["transport"] if "transport" in keys else None,
         )

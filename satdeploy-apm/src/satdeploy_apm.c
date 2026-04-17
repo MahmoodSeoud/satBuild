@@ -466,11 +466,33 @@ static int deploy_single_app(unsigned int node, char *app_name,
 
     if (rc < 0) {
         printf("Error: No response from agent (timeout)\n");
+        satdeploy_history_write_t hist = {
+            .module = config ? config->target_name : "default",
+            .app = app_name,
+            .file_hash = checksum,
+            .remote_path = remote_path,
+            .action = "push",
+            .success = 0,
+            .error_message = "No response from agent (timeout)",
+            .transport = "csp",
+        };
+        satdeploy_history_record(&hist);
         return SLASH_EIO;
     }
 
     if (!resp->success) {
         output_error(resp->error_message);
+        satdeploy_history_write_t hist = {
+            .module = config ? config->target_name : "default",
+            .app = app_name,
+            .file_hash = checksum,
+            .remote_path = remote_path,
+            .action = "push",
+            .success = 0,
+            .error_message = resp->error_message,
+            .transport = "csp",
+        };
+        satdeploy_history_record(&hist);
         satdeploy__deploy_response__free_unpacked(resp, NULL);
         return SLASH_EIO;
     }
@@ -478,6 +500,19 @@ static int deploy_single_app(unsigned int node, char *app_name,
     char success_msg[256];
     snprintf(success_msg, sizeof(success_msg), "Deployed %s (%s) via DTP", app_name, checksum);
     output_success(success_msg);
+
+    /* Record successful deploy to history.db */
+    satdeploy_history_write_t hist = {
+        .module = config ? config->target_name : "default",
+        .app = app_name,
+        .file_hash = checksum,
+        .remote_path = remote_path,
+        .action = "push",
+        .success = 1,
+        .backup_path = resp->backup_path,
+        .transport = "csp",
+    };
+    satdeploy_history_record(&hist);
 
     satdeploy__deploy_response__free_unpacked(resp, NULL);
     return SLASH_SUCCESS;
@@ -677,23 +712,45 @@ static int satdeploy_rollback_cmd(struct slash *slash)
 
     Satdeploy__DeployResponse *resp = NULL;
     if (send_deploy_request(node, &req, &resp) < 0) {
+        satdeploy_history_write_t hist = {
+            .module = config ? config->target_name : "default",
+            .app = app_name,
+            .file_hash = "",
+            .remote_path = remote_path,
+            .action = "rollback",
+            .success = 0,
+            .error_message = "No response from agent (timeout)",
+            .transport = "csp",
+        };
+        satdeploy_history_record(&hist);
         return SLASH_EIO;
     }
 
     if (!resp->success) {
         output_error(resp->error_message);
+        satdeploy_history_write_t hist = {
+            .module = config ? config->target_name : "default",
+            .app = app_name,
+            .file_hash = "",
+            .remote_path = remote_path,
+            .action = "rollback",
+            .success = 0,
+            .error_message = resp->error_message,
+            .transport = "csp",
+        };
+        satdeploy_history_record(&hist);
         satdeploy__deploy_response__free_unpacked(resp, NULL);
         return SLASH_EIO;
     }
 
     /* Show which backup was restored */
     char success_msg[256];
+    char restored_hash[16] = {0};
     if (resp->backup_path && strlen(resp->backup_path) > 0) {
         /* Extract hash from backup path - new format: <hash>.bak */
         const char *filename = strrchr(resp->backup_path, '/');
         filename = filename ? filename + 1 : resp->backup_path;
 
-        char restored_hash[16] = {0};
         size_t len = strlen(filename);
         if (len > 4 && strcmp(filename + len - 4, ".bak") == 0) {
             /* Backup format: YYYYMMDD-HHMMSS-{hash8}.bak
@@ -719,6 +776,19 @@ static int satdeploy_rollback_cmd(struct slash *slash)
         snprintf(success_msg, sizeof(success_msg), "Rolled back %s", app_name);
     }
     output_success(success_msg);
+
+    /* Record successful rollback to history.db */
+    satdeploy_history_write_t hist = {
+        .module = config ? config->target_name : "default",
+        .app = app_name,
+        .file_hash = restored_hash[0] ? restored_hash : "",
+        .remote_path = remote_path,
+        .action = "rollback",
+        .success = 1,
+        .backup_path = resp->backup_path,
+        .transport = "csp",
+    };
+    satdeploy_history_record(&hist);
 
     satdeploy__deploy_response__free_unpacked(resp, NULL);
     return SLASH_SUCCESS;

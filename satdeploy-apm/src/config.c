@@ -91,6 +91,7 @@ satdeploy_config_t *satdeploy_config_load(void)
     yaml_parser_set_input_file(&parser, file);
 
     /* Set defaults */
+    safe_strcpy(g_config.target_name, "default", sizeof(g_config.target_name));
     g_config.agent_node = 0;
     g_config.num_apps = 0;
 
@@ -175,6 +176,8 @@ satdeploy_config_t *satdeploy_config_load(void)
             } else if (state == STATE_DEFAULTS_KEY) {
                 if (strcmp(current_key, "agent_node") == 0) {
                     g_config.agent_node = (uint32_t)atoi(value);
+                } else if (strcmp(current_key, "name") == 0) {
+                    safe_strcpy(g_config.target_name, value, sizeof(g_config.target_name));
                 }
                 state = STATE_DEFAULTS;
             } else if (state == STATE_MODULES) {

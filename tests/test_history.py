@@ -52,7 +52,8 @@ class TestHistoryInit:
         expected = {
             "id", "app", "timestamp", "git_hash", "file_hash",
             "remote_path", "backup_path", "action", "success", "error_message",
-            "module", "service_hash", "vmem_cleared", "provenance_source"
+            "module", "service_hash", "vmem_cleared", "provenance_source",
+            "transport"
         }
         assert expected == columns
 

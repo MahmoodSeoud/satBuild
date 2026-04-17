@@ -23,6 +23,9 @@ typedef struct {
 
 /* Global configuration */
 typedef struct {
+    /* Target identity */
+    char target_name[MAX_APP_NAME_LEN]; /* "name:" from config, default "default" */
+
     /* Agent address */
     uint32_t agent_node;                /* satdeploy-agent CSP node address */
 
