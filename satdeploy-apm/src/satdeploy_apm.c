@@ -175,7 +175,7 @@ static int send_deploy_request(unsigned int node, Satdeploy__DeployRequest *req,
     int resp_len = csp_transaction_w_opts(CSP_PRIO_NORM, node, SATDEPLOY_PORT,
                                           DEFAULT_TIMEOUT, req_buf, req_size,
                                           resp_buf, -1,  /* -1 = unknown reply size */
-                                          0);
+                                          0);  /* no CRC32: agent does not set it on reply */
     free(req_buf);
 
     if (resp_len <= 0) {
@@ -183,11 +183,20 @@ static int send_deploy_request(unsigned int node, Satdeploy__DeployRequest *req,
         return -1;
     }
 
+    printf("[DEBUG-APM] resp_len=%d bytes:", resp_len);
+    for (int i = 0; i < resp_len && i < 96; i++) printf(" %02x", resp_buf[i]);
+    printf("\n");
+
     *resp_out = satdeploy__deploy_response__unpack(NULL, resp_len, resp_buf);
     if (!*resp_out) {
         printf("Failed to parse response\n");
         return -1;
     }
+
+    printf("[DEBUG-APM] unpacked: success=%d n_apps=%zu error_code=%u msg=%s\n",
+           (*resp_out)->success, (*resp_out)->n_apps,
+           (*resp_out)->error_code,
+           (*resp_out)->error_message ? (*resp_out)->error_message : "(null)");
 
     return 0;
 }
