@@ -25,6 +25,7 @@ class DeploymentRecord:
     service_hash: Optional[str] = None
     vmem_cleared: bool = False
     transport: Optional[str] = None  # "ssh" or "csp"
+    source: Optional[str] = None  # "cli" or "web" (which surface triggered the action)
     id: Optional[int] = None
 
 
@@ -71,7 +72,8 @@ class History:
                     service_hash TEXT,
                     vmem_cleared INTEGER NOT NULL DEFAULT 0,
                     provenance_source TEXT,
-                    transport TEXT
+                    transport TEXT,
+                    source TEXT NOT NULL DEFAULT 'cli'
                 )
             """)
 
@@ -110,6 +112,15 @@ class History:
         if "transport" not in columns:
             conn.execute("ALTER TABLE deployments ADD COLUMN transport TEXT")
 
+        # Add source column if missing (distinguishes CLI-triggered vs web-triggered actions).
+        # Uses NOT NULL DEFAULT 'cli' so that existing rows inherit the historical CLI-only
+        # assumption, while new writes from the dashboard can record "web" to support R6
+        # audit-trail legibility + eng-review landmine #7 (no hardcoded "ssh"/"cli" constants).
+        if "source" not in columns:
+            conn.execute(
+                "ALTER TABLE deployments ADD COLUMN source TEXT NOT NULL DEFAULT 'cli'"
+            )
+
     def record(self, record: DeploymentRecord) -> None:
         """Record a deployment operation.
 
@@ -126,8 +137,8 @@ class History:
             INSERT INTO deployments
             (module, app, timestamp, git_hash, file_hash, remote_path, backup_path,
              action, success, error_message, service_hash, vmem_cleared,
-             provenance_source, transport)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             provenance_source, transport, source)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 record.module,
@@ -143,7 +154,8 @@ class History:
                 record.service_hash,
                 1 if record.vmem_cleared else 0,
                 record.provenance_source,
-                "ssh",  # Python CLI always deploys via SSH
+                record.transport or "ssh",
+                record.source or "cli",
             ),
         )
         conn.commit()
@@ -273,4 +285,5 @@ class History:
             vmem_cleared=bool(row["vmem_cleared"]),
             provenance_source=row["provenance_source"] if "provenance_source" in keys else None,
             transport=row["transport"] if "transport" in keys else None,
+            source=row["source"] if "source" in keys else None,
         )
