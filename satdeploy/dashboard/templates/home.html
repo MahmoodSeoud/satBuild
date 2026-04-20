@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block title %}satdeploy — dashboard{% endblock %}
+{% block main %}
+<section class="tiles">
+  {% if not tiles %}
+    <div class="empty">
+      <p>No deployments yet.</p>
+      <p class="muted">Run <code>satdeploy push &lt;app&gt;</code> to record your first deploy.</p>
+    </div>
+  {% else %}
+    {% for t in tiles %}
+      <article class="tile tile--{{ t.state }}">
+        <header>
+          <span class="tile__app">{{ t.app }}</span>
+          <span class="tile__module">@ {{ t.module }}</span>
+        </header>
+        <div class="tile__state">{{ t.state }}</div>
+        {% if t.record %}
+          <dl class="tile__meta">
+            <dt>hash</dt><dd><code>{{ t.record.file_hash[:8] if t.record.file_hash else '—' }}</code></dd>
+            <dt>when</dt><dd>{{ t.record.timestamp }}</dd>
+            <dt>source</dt><dd>{{ t.record.source or 'cli' }}</dd>
+          </dl>
+          <a class="tile__link" href="/iterations/{{ t.record.file_hash }}">view iteration →</a>
+        {% endif %}
+      </article>
+    {% endfor %}
+  {% endif %}
+</section>
+{% endblock %}

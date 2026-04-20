@@ -44,6 +44,7 @@ from satdeploy.transport import Transport, SSHTransport, LocalTransport, Transpo
 from satdeploy import audit as audit_module
 from satdeploy import debuginfod as debuginfod_module
 from satdeploy import demo as demo_module
+from satdeploy.dashboard import security as dashboard_security
 
 
 def get_transport(
@@ -1712,6 +1713,96 @@ def shutil_which_gdb() -> str | None:
     """Prefer gdb-multiarch over native gdb for ARM targets."""
     import shutil
     return shutil.which("gdb-multiarch") or shutil.which("gdb")
+
+
+def _detect_lan_bind() -> str:
+    """Pick the first non-loopback IPv4 address the kernel would use for egress.
+
+    This is the "dashboard visible to teammates on the LAN" default. Falls back to
+    localhost if the machine is fully offline. Uses the Unix-classic
+    connect-to-a-public-IP-on-UDP trick — no packet is sent, we just ask the kernel
+    which source IP it would pick, then read it back.
+    """
+    import socket
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        sock.settimeout(0.2)
+        sock.connect(("8.8.8.8", 80))
+        return sock.getsockname()[0]
+    except OSError:
+        return "127.0.0.1"
+    finally:
+        sock.close()
+
+
+@main.command()
+@click.option(
+    "--bind",
+    "bind_host",
+    default=None,
+    metavar="HOST",
+    help="Interface to bind (default: auto-detect LAN IP; use 127.0.0.1 for laptop-only, 0.0.0.0 for full network).",
+)
+@click.option(
+    "--port",
+    default=9090,
+    type=int,
+    help="Port to listen on (default: 9090).",
+)
+@click.option(
+    "--secret",
+    "secret_override",
+    default=None,
+    help="Reuse an existing shared-secret instead of generating one (for scripting / stable URLs).",
+)
+@config_option
+def dashboard(
+    bind_host: str | None,
+    port: int,
+    secret_override: str | None,
+    config_path: Path | None,
+):
+    """Serve the satdeploy dashboard (FastAPI + HTMX on port 9090)."""
+    cfg = load_config(config_path)
+    db_path = cfg.history_path
+
+    bind = bind_host or _detect_lan_bind()
+    secret = secret_override or dashboard_security.generate_secret()
+
+    if bind == "0.0.0.0":
+        click.echo(warning(
+            "⚠ --bind 0.0.0.0 exposes the dashboard to the entire network. "
+            "Anyone who reaches this host can view history and trigger rollbacks "
+            "(with the shared secret). Use only on a trusted network."
+        ))
+
+    click.echo(success(f"dashboard at http://{bind}:{port}"))
+    click.echo(f"  history.db: {db_path}")
+    click.echo(f"  shared secret: {accent(secret)}")
+    click.echo(f"  set header X-Satdeploy-Token for rollback calls")
+    click.echo(dim("Ctrl+C to stop"))
+
+    env = {
+        **os.environ,
+        "SATDEPLOY_DASHBOARD_DB": str(db_path),
+        "SATDEPLOY_DASHBOARD_SECRET": secret,
+        "SATDEPLOY_DASHBOARD_CONFIG": str(cfg.config_path),
+    }
+
+    import sys
+    cmd = [
+        sys.executable, "-m", "uvicorn",
+        "satdeploy.dashboard.app:app",
+        "--host", bind,
+        "--port", str(port),
+        "--log-level", "warning",
+    ]
+    # subprocess.run blocks on the uvicorn process; Ctrl+C propagates as SIGINT
+    # so uvicorn shuts down cleanly. Out-of-process per eng-review landmine #10.
+    try:
+        subprocess.run(cmd, env=env)
+    except KeyboardInterrupt:
+        pass
 
 
 @main.group(cls=ColoredGroup)
