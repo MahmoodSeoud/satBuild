@@ -9,6 +9,7 @@ env-var setup.
 from __future__ import annotations
 
 import os
+import sqlite3
 from pathlib import Path
 from typing import Optional
 
@@ -21,6 +22,7 @@ from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 from slowapi.util import get_remote_address
 
+from satdeploy.dashboard import git_utils, security
 from satdeploy.history import History
 
 
@@ -33,6 +35,57 @@ def _tile_state(record) -> str:
     if not record.success:
         return "failed"
     return "deployed"
+
+
+def _fetch_iteration_rows(db_path: Path, file_hash: str) -> list[dict]:
+    """Return every deployment row carrying ``file_hash``, newest first."""
+    conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    conn.row_factory = sqlite3.Row
+    try:
+        cursor = conn.execute(
+            "SELECT * FROM deployments WHERE file_hash = ? ORDER BY timestamp DESC",
+            (file_hash,),
+        )
+        return [dict(row) for row in cursor.fetchall()]
+    finally:
+        conn.close()
+
+
+def _is_hash_live(db_path: Path, module: str, app_name: str, file_hash: str) -> tuple[bool, Optional[str]]:
+    """Is ``file_hash`` still the current deployment for (module, app)?
+
+    Returns ``(is_live, superseding_hash)``. ``superseding_hash`` is ``None``
+    when live, otherwise the file_hash that currently runs on that target.
+    """
+    conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    try:
+        row = conn.execute(
+            "SELECT file_hash FROM deployments "
+            "WHERE module = ? AND app = ? "
+            "ORDER BY timestamp DESC LIMIT 1",
+            (module, app_name),
+        ).fetchone()
+        if row is None:
+            return (False, None)
+        current = row[0]
+        return (current == file_hash, current if current != file_hash else None)
+    finally:
+        conn.close()
+
+
+def _resolve_diff(git_hash: Optional[str]) -> tuple[str, Optional[str]]:
+    """Determine which of the 7 design-review states the diff section is in.
+
+    Returns ``(state, content)`` where state is one of:
+    ``"ok"`` (diff renders), ``"none"`` (no git_hash), ``"not_local"``
+    (commit not fetchable from the dashboard host's git repo).
+    """
+    if not git_hash:
+        return ("none", None)
+    try:
+        return ("ok", git_utils.git_show(git_hash))
+    except git_utils.GitLookupError:
+        return ("not_local", None)
 
 
 def create_app(
@@ -83,6 +136,53 @@ def create_app(
             request=request,
             name="_ticker.html",
             context={"events": events},
+        )
+
+    @app.get("/iterations/{file_hash}", response_class=HTMLResponse)
+    def iteration(request: Request, file_hash: str):
+        rows = _fetch_iteration_rows(db_path, file_hash)
+        if not rows:
+            return templates.TemplateResponse(
+                request=request,
+                name="iteration_404.html",
+                context={"file_hash": file_hash},
+                status_code=404,
+            )
+
+        primary = rows[0]
+        is_live, superseding = _is_hash_live(
+            db_path, primary["module"], primary["app"], file_hash
+        )
+
+        diff_state, diff_content = _resolve_diff(primary.get("git_hash"))
+
+        # Latest rollback that failed — shown as a red banner. Template scans
+        # in reverse-chronological order so the most recent failure wins.
+        failed_rollback = next(
+            (e for e in rows if e["action"] == "rollback" and not e["success"]),
+            None,
+        )
+
+        rollback_token = security.sign_rollback(secret, file_hash)
+        confirm_string = security.expected_confirm_string(
+            primary["app"], primary["module"], file_hash
+        )
+
+        return templates.TemplateResponse(
+            request=request,
+            name="iteration.html",
+            context={
+                "file_hash": file_hash,
+                "primary": primary,
+                "events": rows,
+                "is_live": is_live,
+                "superseding": superseding,
+                "diff_state": diff_state,
+                "diff": diff_content,
+                "failed_rollback": failed_rollback,
+                "rollback_token": rollback_token,
+                "confirm_string": confirm_string,
+            },
         )
 
     @app.get("/healthz")

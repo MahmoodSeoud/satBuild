@@ -1,0 +1,133 @@
+{% extends "base.html" %}
+{% block title %}{{ primary.app }} @ {{ primary.module }} — satdeploy{% endblock %}
+{% block main %}
+{#
+  Iteration permalink. 8-column info hierarchy per /plan-design-review 2026-04-20.
+  Status bar -> audit timeline -> diff -> validate -> actions.
+#}
+<section class="iteration iteration--state-{% if primary.action == 'rollback' %}rolled-back
+                {%- elif not primary.success %}failed
+                {%- else %}deployed{% endif %}">
+
+  <header class="iteration__status">
+    {% if primary.action == 'rollback' %}
+      <span class="status-dot status-dot--yellow">⟲</span>
+      <span>rolled back</span>
+    {% elif not primary.success %}
+      <span class="status-dot status-dot--red">✗</span>
+      <span>deploy failed</span>
+    {% else %}
+      <span class="status-dot status-dot--green">●</span>
+      <span>deployed</span>
+    {% endif %}
+    <span class="iteration__title">
+      {{ primary.app }} @ {{ primary.module }}
+      <span class="muted"> · {{ primary.timestamp }}</span>
+    </span>
+    <dl class="iteration__meta">
+      <dt>hash</dt><dd><code>{{ file_hash[:12] if file_hash|length > 12 else file_hash }}</code></dd>
+      <dt>source</dt><dd>{{ primary.source or 'cli' }}</dd>
+      {% if primary.git_hash %}<dt>git</dt><dd><code>{{ primary.git_hash[:12] }}</code></dd>{% endif %}
+    </dl>
+  </header>
+
+  {# State 5: "rollback already performed" — yellow banner when the page's hash
+     is no longer the live version on its (module, app). #}
+  {% if not is_live and superseding %}
+    <aside class="banner banner--yellow">
+      ⟲ This iteration is no longer live on <code>{{ primary.module }}</code>.
+      Current version runs
+      <a href="/iterations/{{ superseding }}"><code>{{ superseding[:12] }}</code></a>.
+    </aside>
+  {% endif %}
+
+  {# State 6: "rollback failed" — red banner when any rollback event on this
+     hash has success=0. `failed_rollback` is picked by the view (most recent). #}
+  {% if failed_rollback %}
+    <aside class="banner banner--red">
+      ✗ Last rollback attempt failed: {{ failed_rollback.error_message or 'unknown error' }}
+      ({{ failed_rollback.timestamp }})
+    </aside>
+  {% endif %}
+
+  <section class="audit-timeline" aria-labelledby="audit-heading">
+    <h2 id="audit-heading">Audit timeline</h2>
+    <table>
+      <thead>
+        <tr>
+          <th scope="col">Timestamp</th>
+          <th scope="col">Action</th>
+          <th scope="col">Source</th>
+          <th scope="col">Result</th>
+          <th scope="col">Target</th>
+          <th scope="col">Transport</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for e in events %}
+          <tr>
+            <td><time>{{ e.timestamp }}</time></td>
+            <td class="action action--{{ e.action }}">{{ e.action }}</td>
+            <td>{{ e.source or 'cli' }}</td>
+            <td>
+              {% if e.success %}
+                <span class="ok">success</span>
+              {% else %}
+                <span class="fail">{{ e.error_message or 'failed' }}</span>
+              {% endif %}
+            </td>
+            <td>{{ e.module }}</td>
+            <td>{{ e.transport or '—' }}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </section>
+
+  <section class="diff-block" aria-labelledby="diff-heading">
+    <h2 id="diff-heading">Diff</h2>
+    {% if diff_state == 'none' %}
+      <div class="muted-block">
+        No git provenance. Binary was deployed via <code>--local</code> without a
+        commit reference. The audit trail is still complete, there is just no
+        source diff to show.
+      </div>
+    {% elif diff_state == 'not_local' %}
+      <div class="muted-block">
+        Commit <code>{{ primary.git_hash[:12] }}</code> isn't in the local git
+        repo. Run <code>git fetch origin</code> on this dashboard host, or view
+        externally.
+        <button type="button"
+                data-copy="{{ primary.git_hash }}"
+                onclick="navigator.clipboard.writeText(this.dataset.copy)">
+          Copy full hash
+        </button>
+      </div>
+    {% else %}
+      <pre class="diff-body">{{ diff }}</pre>
+    {% endif %}
+  </section>
+
+  {# Validate output placeholder — gate-flip is a later commit; this section
+     renders the "no validation run" message until validations table exists. #}
+  <section class="validate-block" aria-labelledby="validate-heading">
+    <h2 id="validate-heading">Validate output</h2>
+    <div class="muted-block">
+      No validation run recorded. Gate-flip (<code>satdeploy validate</code>) is
+      a later Phase 0 item; once it ships this block will show the stdout/stderr
+      tails for the matching validation run, if any.
+    </div>
+  </section>
+
+  <footer class="iteration__actions">
+    {# Rollback button is wired up in the R6 rollback-endpoint commit. For now
+       show a disabled placeholder so the design hierarchy is complete. #}
+    <button type="button"
+            class="btn btn--danger"
+            disabled
+            title="Rollback endpoint lands in the next commit">
+      Rollback to this hash…
+    </button>
+  </footer>
+</section>
+{% endblock %}
