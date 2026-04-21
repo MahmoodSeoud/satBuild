@@ -1048,6 +1048,59 @@ def push(
         transport.disconnect()
 
 
+@main.command()
+@click.argument("app", type=AppNameType())
+@click.option("--local", type=click.Path(exists=True, dir_okay=False),
+              help="Path to the local binary (overrides config.local)")
+@click.option("--sysroot", type=click.Path(exists=True, file_okay=False),
+              help="Target sysroot for ABI check (overrides $SATDEPLOY_SDK)")
+@click.option("--debug", is_flag=True, default=False,
+              help="Spawn gdbserver on target + start local debuginfod")
+@click.option("--force", is_flag=True, default=False,
+              help="Skip hash-equality short-circuit")
+@config_option
+@target_option
+def iterate(
+    app: str,
+    local: str | None,
+    sysroot: str | None,
+    debug: bool,
+    force: bool,
+    config_path: Path | None,
+    target_name: str | None,
+):
+    """Edit-to-running in one command (the wedge).
+
+    Full-binary upload via the configured transport, pre-upload ABI check
+    against the target sysroot, per-app lock to prevent concurrent iterates,
+    optional gdbserver+debuginfod for --debug.
+
+    Bsdiff patch path is Lane A future work (needs agent-side bspatch).
+    """
+    from satdeploy import iterate as iterate_mod
+    config = load_config(config_path)
+    module_config = resolve_target(config, target_name)
+
+    def _step(msg: str) -> None:
+        click.echo(f"  {msg}")
+
+    result = iterate_mod.run_iterate(
+        config,
+        module_config,
+        app,
+        local_override=local,
+        sysroot=Path(sysroot) if sysroot else None,
+        debug=debug,
+        force=force,
+        on_step=_step,
+    )
+    click.echo(success(
+        f"iterate {result.app}: {result.file_hash} "
+        f"deployed in {result.elapsed_s:.1f}s"
+    ))
+    if result.debug_url:
+        click.echo(dim(f"  export DEBUGINFOD_URLS={result.debug_url}"))
+        click.echo(dim(f"  satdeploy gdb {result.app}  # attach to target gdbserver"))
 
 
 @main.command()
