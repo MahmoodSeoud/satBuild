@@ -27,19 +27,65 @@ from satdeploy.output import success, SatDeployError
 
 DEMO_ROOT = Path.home() / ".satdeploy" / "demo"
 DEMO_SOURCE = DEMO_ROOT / "source"       # throwaway git repo with v1+v2 binaries
-DEMO_TARGET = DEMO_ROOT / "target"       # where files are "deployed" locally
-DEMO_BACKUPS = DEMO_ROOT / "backups"     # versioned backups for rollback
+# R1 fleet preview: the demo spins up two local "satellites" so the dashboard
+# and the CLI --target flag both have something to show. Older single-target
+# demos (DEMO_TARGET, DEMO_BACKUPS) remain as backward-compat aliases for the
+# first satellite so existing tests continue to work.
+DEMO_TARGETS = ["som1", "som2"]
+DEMO_TARGET = DEMO_ROOT / "targets" / DEMO_TARGETS[0]
+DEMO_BACKUPS = DEMO_ROOT / "backups" / DEMO_TARGETS[0]
 
 DEFAULT_CONFIG_PATH = Path.home() / ".satdeploy" / "config.yaml"
 DEMO_CONFIG_PATH = DEFAULT_CONFIG_PATH
 SAVED_CONFIG_PATH = DEMO_ROOT / "saved-config.yaml"
 
-# Deploy target inside DEMO_TARGET — mirrors a real satellite path layout
+# Deploy target inside each target dir — mirrors a real satellite path layout
 # so the demo output looks like a real deployment.
 DEMO_REMOTE_PATH = "/bin/test_app"
 
+
+def _target_dir_for(name: str) -> Path:
+    """Resolve a per-target dir through the (monkeypatchable) DEMO_ROOT at call time."""
+    return DEMO_ROOT / "targets" / name
+
+
+def _backup_dir_for(name: str) -> Path:
+    return DEMO_ROOT / "backups" / name
+
+
+def _build_demo_config() -> dict:
+    """Build a fresh demo config dict rooted at the current DEMO_* paths.
+
+    Built lazily instead of at import so monkeypatched paths in tests land
+    in the YAML written by `_write_demo_config` (the old module-level dict
+    otherwise froze the ~/.satdeploy paths at import time).
+    """
+    return {
+        "default_target": DEMO_TARGETS[0],
+        "targets": {
+            name: {
+                "transport": "local",
+                "target_dir": str(_target_dir_for(name)),
+                "backup_dir": str(_backup_dir_for(name)),
+            }
+            for name in DEMO_TARGETS
+        },
+        "max_backups": 5,
+        "apps": {
+            "test_app": {
+                "local": str(DEMO_SOURCE / "test_app"),
+                "remote": DEMO_REMOTE_PATH,
+                "service": None,
+            }
+        },
+    }
+
+
+# Kept for backward compatibility with tests that monkeypatch fields on the
+# module-level DEMO_CONFIG dict. Reflects the first target only; use
+# _build_demo_config() for the multi-target YAML write.
 DEMO_CONFIG = {
-    "name": "demo",
+    "name": DEMO_TARGETS[0],
     "transport": "local",
     "target_dir": str(DEMO_TARGET),
     "backup_dir": str(DEMO_BACKUPS),
@@ -66,11 +112,15 @@ echo "test_app v2.0.0 (demo) — telemetry enabled"
 TUTORIAL_TEXT = """\
 
   Ready. A throwaway git repo is at {source}
-  and test_app v1.0.0 is "deployed" to {target}{remote}.
+  and test_app v1.0.0 is "deployed" to two fleet targets:
+    som1: {som1}{remote}
+    som2: {som2}{remote}
 
-    satdeploy status             See what's running
-    satdeploy push test_app      Deploy v2.0.0 (git-tagged)
-    satdeploy rollback test_app  Undo the deploy in one command
+    satdeploy status                         See what's on som1 (default)
+    satdeploy status --target som2           See what's on som2
+    satdeploy push test_app                  Deploy v2.0.0 to som1
+    satdeploy push test_app --target som2    Deploy v2.0.0 to som2
+    satdeploy rollback test_app --target som2  Undo a deploy
 
   When you're done:  satdeploy demo stop
   Next step:         satdeploy init   (point at real hardware)
@@ -123,25 +173,25 @@ def _init_source_repo() -> None:
 
 
 def _install_v1_to_target() -> None:
-    """Pre-install v1 on the local target so `status` shows it deployed.
+    """Pre-install v1 on every fleet target so `status` shows it deployed.
 
-    After the demo sets up the git repo at v2 (HEAD), we also temporarily
-    check out v1 to write it to the target dir, then return HEAD to v2 so
-    the user's next `push` deploys v2 as an upgrade.
+    After the demo sets up the git repo at v2 (HEAD), we write v1 to each
+    satellite's target dir so the user's next `push` deploys v2 as an upgrade.
+    Name kept (singular) for backward compatibility with tests that call it.
     """
-    resolved_target = DEMO_TARGET / DEMO_REMOTE_PATH.lstrip("/")
-    resolved_target.parent.mkdir(parents=True, exist_ok=True)
-
-    # Get the first commit's content for v1
-    result = subprocess.run(
+    v1_bytes = subprocess.run(
         ["git", "show", "HEAD~1:test_app"],
         cwd=str(DEMO_SOURCE),
         capture_output=True,
         text=True,
         check=True,
-    )
-    resolved_target.write_text(result.stdout)
-    resolved_target.chmod(0o755)
+    ).stdout
+
+    for name in DEMO_TARGETS:
+        resolved_target = _target_dir_for(name) / DEMO_REMOTE_PATH.lstrip("/")
+        resolved_target.parent.mkdir(parents=True, exist_ok=True)
+        resolved_target.write_text(v1_bytes)
+        resolved_target.chmod(0o755)
 
 
 def _write_demo_config() -> None:
@@ -153,13 +203,25 @@ def _write_demo_config() -> None:
         try:
             with open(DEMO_CONFIG_PATH) as f:
                 existing = yaml.safe_load(f)
-            if existing and existing.get("name") != "demo":
+            if existing and not _is_demo_config(existing):
                 shutil.copy2(DEMO_CONFIG_PATH, SAVED_CONFIG_PATH)
         except (yaml.YAMLError, OSError):
             pass
 
     with open(DEMO_CONFIG_PATH, "w") as f:
-        yaml.dump(DEMO_CONFIG, f, default_flow_style=False)
+        yaml.dump(_build_demo_config(), f, default_flow_style=False)
+
+
+def _is_demo_config(data: dict) -> bool:
+    """Recognise a written-by-demo config so we don't stash it on restart.
+
+    Handles both legacy (`name: demo`) and R1 fleet (`targets: {som1, som2}`)
+    shapes — demo_start → demo_stop → demo_start should stash once, not twice.
+    """
+    if data.get("name") == "demo":
+        return True
+    targets = data.get("targets")
+    return bool(isinstance(targets, dict) and set(DEMO_TARGETS).issubset(targets))
 
 
 def _reset_demo_history() -> None:
@@ -170,24 +232,15 @@ def _reset_demo_history() -> None:
 
 
 def _seed_demo_history() -> None:
-    """Seed history with a v1 push record so the baseline `status` shows deployed.
+    """Seed history with a v1 push record for every fleet target so both dashboard
+    rows show `deployed` on first `satdeploy status`.
 
-    Computes the real hash of the v1 binary sitting on the target and
-    the real git hash of the v1 commit, so every line of the baseline
-    output is honest.
+    Computes the real hash of the v1 binary sitting on each target and the real
+    git hash of the v1 commit, so every line of the baseline output is honest.
     """
     import hashlib
     from satdeploy.history import DeploymentRecord, History
-    from satdeploy.provenance import capture_provenance
 
-    resolved_target = DEMO_TARGET / DEMO_REMOTE_PATH.lstrip("/")
-    if not resolved_target.exists():
-        return
-
-    file_hash = hashlib.sha256(resolved_target.read_bytes()).hexdigest()[:8]
-
-    # Git provenance for v1 — we get it by asking git about HEAD~1
-    # directly, since the source binary on disk is at HEAD (v2).
     git_hash_full = subprocess.run(
         ["git", "rev-parse", "--short=8", "HEAD~1"],
         cwd=str(DEMO_SOURCE),
@@ -200,20 +253,26 @@ def _seed_demo_history() -> None:
     history_db = DEMO_CONFIG_PATH.parent / "history.db"
     history = History(history_db)
     history.init_db()
-    history.record(DeploymentRecord(
-        app="test_app",
-        file_hash=file_hash,
-        remote_path=DEMO_REMOTE_PATH,
-        action="push",
-        success=True,
-        module="demo",
-        git_hash=git_provenance,
-        provenance_source="local",
-    ))
+
+    for name in DEMO_TARGETS:
+        resolved_target = _target_dir_for(name) / DEMO_REMOTE_PATH.lstrip("/")
+        if not resolved_target.exists():
+            continue
+        file_hash = hashlib.sha256(resolved_target.read_bytes()).hexdigest()[:8]
+        history.record(DeploymentRecord(
+            app="test_app",
+            file_hash=file_hash,
+            remote_path=DEMO_REMOTE_PATH,
+            action="push",
+            success=True,
+            module=name,
+            git_hash=git_provenance,
+            provenance_source="local",
+        ))
 
 
 def demo_start() -> None:
-    """Set up the dockerless demo environment."""
+    """Set up the dockerless demo environment (2-satellite fleet preview)."""
     # Friendly preflight: git is the only hard dependency
     if not shutil.which("git"):
         raise SatDeployError(
@@ -221,15 +280,19 @@ def demo_start() -> None:
             "Install git and try again."
         )
 
-    click.echo("Setting up demo environment...")
+    click.echo("Setting up demo environment (fleet: som1 + som2)...")
 
     DEMO_ROOT.mkdir(parents=True, exist_ok=True)
-    if DEMO_TARGET.exists():
-        shutil.rmtree(DEMO_TARGET)
-    DEMO_TARGET.mkdir(parents=True)
-    if DEMO_BACKUPS.exists():
-        shutil.rmtree(DEMO_BACKUPS)
-    DEMO_BACKUPS.mkdir(parents=True)
+    # Clear per-target dirs so repeated `demo start` always produces a clean fleet
+    for name in DEMO_TARGETS:
+        td = _target_dir_for(name)
+        if td.exists():
+            shutil.rmtree(td)
+        td.mkdir(parents=True)
+        bd = _backup_dir_for(name)
+        if bd.exists():
+            shutil.rmtree(bd)
+        bd.mkdir(parents=True)
 
     _init_source_repo()
     _install_v1_to_target()
@@ -240,7 +303,8 @@ def demo_start() -> None:
     click.echo(success(f"Demo config written to {DEMO_CONFIG_PATH}"))
     click.echo(TUTORIAL_TEXT.format(
         source=DEMO_SOURCE,
-        target=DEMO_TARGET,
+        som1=_target_dir_for("som1"),
+        som2=_target_dir_for("som2"),
         remote=DEMO_REMOTE_PATH,
     ))
 
@@ -268,7 +332,7 @@ def demo_stop(clean: bool = False) -> None:
         try:
             with open(DEMO_CONFIG_PATH) as f:
                 existing = yaml.safe_load(f)
-            if existing and existing.get("name") == "demo":
+            if existing and _is_demo_config(existing):
                 DEMO_CONFIG_PATH.unlink()
                 click.echo(success("Demo config removed"))
         except (yaml.YAMLError, OSError):
@@ -281,13 +345,13 @@ def demo_stop(clean: bool = False) -> None:
 
 def demo_status() -> None:
     """Show whether the demo environment is set up."""
-    if not DEMO_ROOT.exists() or not DEMO_TARGET.exists():
+    if not DEMO_ROOT.exists() or not _target_dir_for(DEMO_TARGETS[0]).exists():
         click.echo("Demo environment is not set up.")
         click.echo("Start with: satdeploy demo start")
         return
 
     click.echo(success("Demo environment is set up"))
     click.echo(f"  Source repo: {DEMO_SOURCE}")
-    click.echo(f"  Target:      {DEMO_TARGET}")
-    click.echo(f"  Backups:     {DEMO_BACKUPS}")
+    for name in DEMO_TARGETS:
+        click.echo(f"  {name}:        {_target_dir_for(name)}")
     click.echo(f"  Config:      {DEMO_CONFIG_PATH}")

@@ -30,26 +30,29 @@ def isolated_demo(tmp_path, monkeypatch):
     """Redirect all demo paths into tmp_path so tests don't touch ~/.satdeploy."""
     root = tmp_path / "demo"
     source = root / "source"
-    target = root / "target"
-    backups = root / "backups"
+    som1_target = root / "targets" / "som1"
+    som2_target = root / "targets" / "som2"
+    som1_backups = root / "backups" / "som1"
+    som2_backups = root / "backups" / "som2"
     config_path = tmp_path / "config.yaml"
 
-    # Patch module-level constants AND the DEMO_CONFIG dict paths so the
-    # written config references tmp_path, not ~/.satdeploy.
+    # Patch module-level constants so the written config + computed target
+    # dirs all live under tmp_path. `_target_dir_for` reads DEMO_ROOT at
+    # call time, so patching DEMO_ROOT covers both targets transparently.
     monkeypatch.setattr("satdeploy.demo.DEMO_ROOT", root)
     monkeypatch.setattr("satdeploy.demo.DEMO_SOURCE", source)
-    monkeypatch.setattr("satdeploy.demo.DEMO_TARGET", target)
-    monkeypatch.setattr("satdeploy.demo.DEMO_BACKUPS", backups)
+    monkeypatch.setattr("satdeploy.demo.DEMO_TARGET", som1_target)
+    monkeypatch.setattr("satdeploy.demo.DEMO_BACKUPS", som1_backups)
     monkeypatch.setattr("satdeploy.demo.DEFAULT_CONFIG_PATH", config_path)
     monkeypatch.setattr("satdeploy.demo.DEMO_CONFIG_PATH", config_path)
     monkeypatch.setattr(
         "satdeploy.demo.SAVED_CONFIG_PATH", root / "saved-config.yaml",
     )
     monkeypatch.setitem(
-        DEMO_CONFIG, "target_dir", str(target),
+        DEMO_CONFIG, "target_dir", str(som1_target),
     )
     monkeypatch.setitem(
-        DEMO_CONFIG, "backup_dir", str(backups),
+        DEMO_CONFIG, "backup_dir", str(som1_backups),
     )
     monkeypatch.setitem(
         DEMO_CONFIG["apps"]["test_app"], "local", str(source / "test_app"),
@@ -58,8 +61,12 @@ def isolated_demo(tmp_path, monkeypatch):
     yield {
         "root": root,
         "source": source,
-        "target": target,
-        "backups": backups,
+        "target": som1_target,
+        "backups": som1_backups,
+        "som1_target": som1_target,
+        "som2_target": som2_target,
+        "som1_backups": som1_backups,
+        "som2_backups": som2_backups,
         "config_path": config_path,
     }
 
@@ -110,28 +117,30 @@ class TestInitSourceRepo:
 
 
 class TestInstallV1ToTarget:
-    def test_pre_installs_v1_content(self, isolated_demo):
+    def test_pre_installs_v1_content_on_both_fleet_targets(self, isolated_demo):
         _init_source_repo()
         _install_v1_to_target()
 
-        resolved = (
-            isolated_demo["target"] / DEMO_REMOTE_PATH.lstrip("/")
-        )
-        assert resolved.exists()
-        content = resolved.read_text()
-        assert "v1.0.0" in content
-        assert "telemetry enabled" not in content
+        for key in ("som1_target", "som2_target"):
+            resolved = isolated_demo[key] / DEMO_REMOTE_PATH.lstrip("/")
+            assert resolved.exists()
+            content = resolved.read_text()
+            assert "v1.0.0" in content
+            assert "telemetry enabled" not in content
 
 
 class TestWriteDemoConfig:
-    def test_writes_local_transport_config(self, isolated_demo):
+    def test_writes_two_target_local_transport_config(self, isolated_demo):
         _write_demo_config()
         config_path = isolated_demo["config_path"]
         assert config_path.exists()
 
         data = yaml.safe_load(config_path.read_text())
-        assert data["transport"] == "local"
-        assert data["target_dir"] == str(isolated_demo["target"])
+        assert data["default_target"] == "som1"
+        assert set(data["targets"].keys()) == {"som1", "som2"}
+        assert data["targets"]["som1"]["transport"] == "local"
+        assert data["targets"]["som1"]["target_dir"] == str(isolated_demo["som1_target"])
+        assert data["targets"]["som2"]["target_dir"] == str(isolated_demo["som2_target"])
         assert "test_app" in data["apps"]
         assert data["apps"]["test_app"]["remote"] == DEMO_REMOTE_PATH
 
@@ -150,7 +159,7 @@ class TestWriteDemoConfig:
 
 
 class TestSeedDemoHistory:
-    def test_seeds_v1_record_with_real_git_hash(self, isolated_demo):
+    def test_seeds_v1_record_per_fleet_target(self, isolated_demo):
         _init_source_repo()
         _install_v1_to_target()
         _write_demo_config()
@@ -162,14 +171,16 @@ class TestSeedDemoHistory:
         history = History(history_db)
         history.init_db()
         records = history.get_history("test_app")
-        assert len(records) == 1
-        record = records[0]
-        assert record.action == "push"
-        assert record.success is True
-        assert record.git_hash is not None
-        assert record.git_hash.startswith("main@")
-        # 8-char short hash, not full SHA
-        assert len(record.file_hash) == 8
+        # One push record per fleet target.
+        assert len(records) == 2
+        assert {r.module for r in records} == {"som1", "som2"}
+        for record in records:
+            assert record.action == "push"
+            assert record.success is True
+            assert record.git_hash is not None
+            assert record.git_hash.startswith("main@")
+            # 8-char short hash, not full SHA
+            assert len(record.file_hash) == 8
 
 
 class TestDemoStart:
@@ -178,15 +189,17 @@ class TestDemoStart:
 
         assert isolated_demo["source"].exists()
         assert (isolated_demo["source"] / ".git").is_dir()
-        assert isolated_demo["target"].exists()
-        assert isolated_demo["backups"].exists()
         assert isolated_demo["config_path"].exists()
 
-        # v1 pre-installed on target
-        resolved = (
-            isolated_demo["target"] / DEMO_REMOTE_PATH.lstrip("/")
-        )
-        assert "v1.0.0" in resolved.read_text()
+        for tkey, bkey in (
+            ("som1_target", "som1_backups"),
+            ("som2_target", "som2_backups"),
+        ):
+            assert isolated_demo[tkey].exists()
+            assert isolated_demo[bkey].exists()
+            # v1 pre-installed on each fleet target
+            resolved = isolated_demo[tkey] / DEMO_REMOTE_PATH.lstrip("/")
+            assert "v1.0.0" in resolved.read_text()
 
         # History seeded
         history_db = isolated_demo["config_path"].parent / "history.db"
@@ -201,12 +214,15 @@ class TestDemoStart:
 class TestDemoStop:
     def test_removes_demo_files(self, isolated_demo):
         demo_start()
-        assert isolated_demo["target"].exists()
+        assert isolated_demo["som1_target"].exists()
+        assert isolated_demo["som2_target"].exists()
 
         demo_stop()
 
-        assert not isolated_demo["target"].exists()
-        assert not isolated_demo["backups"].exists()
+        assert not isolated_demo["som1_target"].exists()
+        assert not isolated_demo["som2_target"].exists()
+        assert not isolated_demo["som1_backups"].exists()
+        assert not isolated_demo["som2_backups"].exists()
 
     def test_clean_removes_root(self, isolated_demo):
         demo_start()
