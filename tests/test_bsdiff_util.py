@@ -2,9 +2,42 @@
 
 import os
 
+import bsdiff4
 import pytest
 
 from satdeploy import bsdiff_util
+
+
+def test_bsdiff4_pinned_to_v1_spec_version():
+    """Landmine #4: bsdiff4>=1.2.4 emits patches older bspatch cannot decode.
+
+    The agent-side bspatch (shipped in Week 2) must read BSDIFF40-format patches.
+    Pinning bsdiff4==1.2.3 guarantees our Python side emits the legacy format.
+    If this assertion fails, pyproject.toml and the lockfile have drifted and a
+    deployed target will refuse every patch we send.
+    """
+    assert bsdiff4.__version__ == "1.2.3", (
+        f"bsdiff4 {bsdiff4.__version__} installed; 1.2.3 required for BSDIFF40 "
+        f"compatibility with legacy C bspatch implementations (landmine #4)."
+    )
+
+
+def test_compute_patch_emits_legacy_bsdiff40_format():
+    """Landmine #4 (format level): every patch we emit must carry the
+    ``BSDIFF40`` magic. This is the byte-stream contract any legacy C bspatch
+    reads — if the magic drifts, target-side apply silently fails.
+
+    Full byte-equal verification through the agent's C bspatch is a Week 2
+    deliverable (agent-side bspatch not yet wired in).
+    """
+    old = b"the quick brown fox" * 100
+    new = old.replace(b"fox", b"cat")
+    patch = bsdiff_util.compute_patch(old, new)
+    assert patch is not None
+    assert patch[:8] == b"BSDIFF40", (
+        f"Expected BSDIFF40 magic, got {patch[:8]!r}. bsdiff4 version may have "
+        f"drifted — re-pin to ==1.2.3 or ship a matched-source bspatch."
+    )
 
 
 def test_patch_roundtrip_small_delta():
