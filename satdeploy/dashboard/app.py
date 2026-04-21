@@ -25,8 +25,43 @@ from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 from slowapi.util import get_remote_address
 
+from satdeploy.config import Config
 from satdeploy.dashboard import git_utils, security
 from satdeploy.history import History
+
+
+def _fleet_rows(
+    fleet: dict[str, dict],
+    configured_targets: list[str],
+) -> list[dict]:
+    """Group tiles by target for the home page's fleet view (R1).
+
+    Ordering rule: configured targets first (in config order), then any extra
+    targets that only appear in history. Both forms return the same shape:
+    ``[{"target": "som1", "tiles": [...]}, ...]``.
+
+    A configured target with no deploys still gets a row (empty ``tiles``) so
+    the user sees "som2 exists but nothing has shipped yet" — otherwise the
+    fleet preview silently hides unused targets.
+    """
+    def _tiles_for(module: str) -> list[dict]:
+        apps = fleet.get(module, {})
+        return [
+            {
+                "module": module,
+                "app": app_name,
+                "state": _tile_state(record),
+                "record": record,
+            }
+            for app_name, record in sorted(apps.items())
+        ]
+
+    seen = set(configured_targets)
+    rows = [{"target": t, "tiles": _tiles_for(t)} for t in configured_targets]
+    for module in sorted(fleet):
+        if module not in seen:
+            rows.append({"target": module, "tiles": _tiles_for(module)})
+    return rows
 
 
 def _tile_state(record) -> str:
@@ -115,20 +150,17 @@ def create_app(
     def home(request: Request):
         history = History(db_path)
         fleet = history.get_fleet_status()
-        tiles = []
-        for module, apps in fleet.items():
-            for app_name, record in sorted(apps.items()):
-                tiles.append({
-                    "module": module,
-                    "app": app_name,
-                    "state": _tile_state(record),
-                    "record": record,
-                })
+        configured_targets: list[str] = []
+        if config_path and Path(config_path).exists():
+            cfg = Config(config_path=Path(config_path))
+            if cfg.load() is not None:
+                configured_targets = cfg.target_names
+        rows = _fleet_rows(fleet, configured_targets)
         events = history.get_all_history(limit=20)
         return templates.TemplateResponse(
             request=request,
             name="home.html",
-            context={"tiles": tiles, "events": events},
+            context={"rows": rows, "events": events},
         )
 
     @app.get("/api/ticker", response_class=HTMLResponse)

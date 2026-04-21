@@ -36,6 +36,13 @@ code { font-family: var(--mono); background: var(--bg-alt); padding: 0 4px; bord
 
 main { padding: 24px; max-width: 1400px; margin: 0 auto; }
 
+.fleet { display: flex; flex-direction: column; gap: 24px; }
+.fleet-row { display: flex; flex-direction: column; gap: 10px; }
+.fleet-row__head { display: flex; align-items: baseline; gap: 12px; border-bottom: 1px solid var(--border); padding-bottom: 6px; }
+.fleet-row__title { font-size: 15px; font-weight: 700; letter-spacing: 0.02em; margin: 0; color: var(--fg); text-transform: uppercase; font-family: var(--mono); }
+.fleet-row__count { font-size: 12px; font-family: var(--mono); }
+.fleet-row__empty { margin: 0; font-size: 13px; padding: 12px 0; }
+
 .tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 16px; }
 .empty { padding: 32px; text-align: center; color: var(--fg-muted); }
 

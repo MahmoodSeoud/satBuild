@@ -52,6 +52,42 @@ def test_home_renders_one_tile_per_app(seeded_app):
     assert "boom" in body
 
 
+def test_home_groups_tiles_by_target(seeded_app):
+    """R1: fleet preview renders one fleet-row section per target with its tiles."""
+    client = TestClient(seeded_app)
+    body = client.get("/").text
+    # Both target groups must render — the seeded history has rows for som1 and som2.
+    assert 'aria-label="target som1"' in body
+    assert 'aria-label="target som2"' in body
+    # The title appears inside each row's <h2>.
+    assert ">som1<" in body
+    assert ">som2<" in body
+
+
+def test_home_renders_configured_targets_with_no_deploys(tmp_path: Path):
+    """R1: a configured target with no history still gets a row with a hint."""
+    import yaml
+    db = tmp_path / "history.db"
+    History(db).init_db()
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text(yaml.dump({
+        "default_target": "som1",
+        "targets": {
+            "som1": {"transport": "local", "target_dir": str(tmp_path / "som1")},
+            "som2": {"transport": "local", "target_dir": str(tmp_path / "som2")},
+        },
+        "apps": {},
+    }))
+    client = TestClient(create_app(db, "testsecret", config_path=cfg))
+    body = client.get("/").text
+
+    assert 'aria-label="target som1"' in body
+    assert 'aria-label="target som2"' in body
+    # Empty-state hint points the user at the right CLI incantation.
+    assert "--target som1" in body
+    assert "--target som2" in body
+
+
 def test_home_tile_state_classes_reflect_record(seeded_app):
     client = TestClient(seeded_app)
     body = client.get("/").text
