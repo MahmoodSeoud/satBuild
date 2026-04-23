@@ -45,6 +45,7 @@ from satdeploy import audit as audit_module
 from satdeploy import debuginfod as debuginfod_module
 from satdeploy import demo as demo_module
 from satdeploy.dashboard import security as dashboard_security
+from satdeploy.paths import expand_path
 
 
 def get_transport(
@@ -658,7 +659,7 @@ def push(
     adhoc_app_configs = {}  # app_name -> AppConfig for ad-hoc apps
 
     if adhoc_mode:
-        local_path = os.path.expanduser(local)
+        local_path = expand_path(local)
         if not os.path.exists(local_path):
             raise SatDeployError(f"Local file not found: {local_path}")
 
@@ -714,7 +715,7 @@ def push(
     if not adhoc_mode:
         for app_name in apps:
             app_cfg = get_app_config_or_error(config, app_name)
-            local_path_check = os.path.expanduser(local or app_cfg.local) if len(apps) == 1 else os.path.expanduser(app_cfg.local)
+            local_path_check = expand_path(local or app_cfg.local) if len(apps) == 1 else expand_path(app_cfg.local)
             if not os.path.exists(local_path_check):
                 raise SatDeployError(f"Local file not found: {local_path_check}")
 
@@ -728,7 +729,7 @@ def push(
     provenance_map = {}  # app_name -> (provenance_string, source)
     for app_name in apps:
         app_cfg = _get_app_cfg(app_name)
-        local_path_prov = os.path.expanduser(local or app_cfg.local) if len(apps) == 1 else os.path.expanduser(app_cfg.local)
+        local_path_prov = expand_path(local or app_cfg.local) if len(apps) == 1 else expand_path(app_cfg.local)
         provenance, prov_source = resolve_provenance(local_path_prov)
         provenance_map[app_name] = (provenance, prov_source)
 
@@ -764,7 +765,7 @@ def push(
                 start_time = _time.monotonic()
 
                 app_config = _get_app_cfg(app)
-                local_path = os.path.expanduser(local or app_config.local) if len(apps) == 1 else os.path.expanduser(app_config.local)
+                local_path = expand_path(local or app_config.local) if len(apps) == 1 else expand_path(app_config.local)
                 remote_path = app_config.remote
 
                 file_size = os.path.getsize(local_path)
@@ -941,7 +942,7 @@ def push(
 
         for app in apps:
             app_config = _get_app_cfg(app)
-            local_path = os.path.expanduser(local or app_config.local) if len(apps) == 1 else os.path.expanduser(app_config.local)
+            local_path = expand_path(local or app_config.local) if len(apps) == 1 else expand_path(app_config.local)
             remote_path = app_config.remote
             service = app_config.service
 

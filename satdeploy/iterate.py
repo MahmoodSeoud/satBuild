@@ -47,6 +47,7 @@ from typing import Callable, Optional
 
 from satdeploy import abi, debuginfod as debuginfod_module, errors
 from satdeploy.config import Config, ModuleConfig
+from satdeploy.paths import expand_path
 from satdeploy.hash import compute_file_hash
 from satdeploy.history import DeploymentRecord, History
 from satdeploy.provenance import resolve_provenance
@@ -221,7 +222,7 @@ def run_iterate(
             f"Known apps: {known}."
         )
 
-    local_path = Path(os.path.expanduser(local_override or app_config.local))
+    local_path = Path(expand_path(local_override or app_config.local))
     if not local_path.exists():
         raise errors.UnknownError(f"Local file not found: {local_path}")
 

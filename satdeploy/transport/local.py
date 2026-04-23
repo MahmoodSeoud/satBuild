@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Optional
 
 from satdeploy.hash import compute_file_hash
+from satdeploy.paths import expand_path
 from satdeploy.transport.base import (
     AppStatus,
     BackupInfo,
@@ -48,8 +49,8 @@ class LocalTransport(Transport):
         max_backups: int = 10,
         apps: Optional[dict[str, dict]] = None,
     ):
-        self.target_dir = os.path.expanduser(target_dir)
-        self.backup_dir = os.path.expanduser(backup_dir)
+        self.target_dir = expand_path(target_dir)
+        self.backup_dir = expand_path(backup_dir)
         self.max_backups = max_backups
         self._apps = apps or {}
 

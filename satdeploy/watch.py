@@ -59,6 +59,7 @@ from watchdog.observers import Observer
 
 from satdeploy import errors, iterate as iterate_mod
 from satdeploy.config import Config, ModuleConfig
+from satdeploy.paths import expand_path
 
 _DEFAULT_DEBOUNCE_S = 0.3
 _DEFAULT_POLL_INTERVAL_S = 0.05
@@ -160,7 +161,7 @@ def _resolve_watch_targets(config: Config,
                 f"No app named {app!r} in config {config.config_path}. "
                 f"Known apps: {known}."
             )
-        local = Path(os.path.expanduser(app_config.local))
+        local = Path(expand_path(app_config.local))
         # Resolve against the parent dir even if the file doesn't exist
         # yet — watchdog watches the parent anyway.
         try:
