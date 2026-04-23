@@ -1908,6 +1908,18 @@ def demo_status_cmd():
 
 
 @main.group(cls=ColoredGroup)
+def dev():
+    """Developer tooling — gdb, debuginfod, dashboard, audit.
+
+    Not part of the daily deploy loop. These live under `dev` so the
+    top-level `satdeploy --help` stays focused on the core flow:
+    init / doctor / iterate / watch / push / rollback / status / list /
+    logs / demo / config. For debuggers and ops tooling, see
+    `satdeploy dev --help`.
+    """
+
+
+@dev.group(cls=ColoredGroup)
 def debuginfod():
     """Local debuginfod server for cross-arch debugging."""
 
@@ -1957,7 +1969,7 @@ def debuginfod_status():
         click.echo(success(f"debuginfod running (pid {pid}) at {debuginfod_module.DEBUGINFOD_URL}"))
 
 
-@main.command()
+@dev.command()
 @click.argument("app", type=APP_NAME)
 @click.option(
     "--remote",
@@ -2039,7 +2051,7 @@ def _detect_lan_bind() -> str:
         sock.close()
 
 
-@main.command()
+@dev.command()
 @click.option(
     "--bind",
     "bind_host",
@@ -2109,7 +2121,7 @@ def dashboard(
         pass
 
 
-@main.group(cls=ColoredGroup)
+@dev.group(cls=ColoredGroup)
 def audit():
     """Compliance / audit reporting from history.db."""
 
