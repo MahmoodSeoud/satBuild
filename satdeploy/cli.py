@@ -1661,11 +1661,20 @@ def rollback(
               type=click.Choice(["all", "iterate", "watch", "debug", "push"]),
               default="all", show_default=True,
               help="Which workflow to pre-flight check")
+@click.option("--fix", "fix_mode", is_flag=True, default=False,
+              help="Interactively apply the suggested fix for each failed check")
+@click.option("--yes", is_flag=True, default=False,
+              help="With --fix, auto-accept every fix (still prompts for sudo-like fixes)")
+@click.option("--dry-run", "dry_run", is_flag=True, default=False,
+              help="With --fix, print fix commands instead of running them")
 @config_option
 @target_option
 def doctor(
     apps: tuple[str, ...],
     mode: str,
+    fix_mode: bool,
+    yes: bool,
+    dry_run: bool,
     config_path: Path | None,
     target_name: str | None,
 ):
@@ -1675,12 +1684,18 @@ def doctor(
     remote state. Each check says pass/warn/fail with a suggested fix
     command on failure. Exits 1 if any check fails.
 
+    With --fix, doctor walks through each failure and offers to run the
+    fix command (y/N/A/Q per prompt). Sudo-touching fixes always confirm
+    even with --yes, because "give yourself passwordless root" is exactly
+    the kind of decision you want to pause on.
+
     Examples:
 
       satdeploy doctor                              # full check, all apps
       satdeploy doctor --for iterate controller     # iterate prereqs only
       satdeploy doctor --for debug controller       # gdb path prereqs
-      satdeploy doctor --for watch                  # file-watcher prereqs
+      satdeploy doctor --fix                        # run + apply fixes interactively
+      satdeploy doctor --fix --dry-run              # show fixes, don't run them
     """
     from satdeploy import doctor as doctor_mod
 
@@ -1688,7 +1703,10 @@ def doctor(
     module = resolve_target(cfg, target_name)
     app_list = list(apps) if apps else list(cfg.apps.keys())
 
+    all_results: list[doctor_mod.CheckResult] = []
+
     def _emit(result: doctor_mod.CheckResult) -> None:
+        all_results.append(result)
         if result.status == doctor_mod.CheckStatus.PASS:
             prefix = click.style("✓", fg="green")
             click.echo(f"  {prefix} {result.name}: {result.message}")
@@ -1717,11 +1735,83 @@ def doctor(
 
     if summary.ok:
         click.echo(success(summary_line))
-    else:
-        click.echo(warning(summary_line))
-        click.echo(dim("Fix the ✗ lines above, then re-run `satdeploy doctor`."))
+        return
+
+    click.echo(warning(summary_line))
+
+    # --fix interactive loop
+    if fix_mode:
+        fixable = [r for r in all_results
+                   if r.status == doctor_mod.CheckStatus.FAIL and r.fix_shell]
+        if not fixable:
+            click.echo(dim("No failing checks have an auto-runnable fix. "
+                           "Read the ✗ lines above for next steps."))
+            ctx = click.get_current_context()
+            ctx.exit(1)
+
+        click.echo("")
+        click.echo(click.style(
+            f"--fix: {len(fixable)} failure(s) have an executable fix.", bold=True))
+        if dry_run:
+            click.echo(dim("(dry-run — nothing will actually execute)"))
+
+        auto_yes = yes
+        applied = 0
+        quit_early = False
+        for result in fixable:
+            if quit_early:
+                break
+            touches_sudo = "sudo" in (result.fix_shell or "")
+            click.echo("")
+            click.echo(f"  ✗ {result.name}: {result.message}")
+            click.echo(dim(f"    would run: {result.fix_shell}"))
+
+            should_run: bool
+            # Sudo-touching fixes always prompt, even under --yes.
+            if auto_yes and not touches_sudo:
+                should_run = True
+            else:
+                prompt = "Apply? [y]es/[N]o/[a]ll/[q]uit"
+                if touches_sudo and auto_yes:
+                    prompt += "  (sudo touches → confirming despite --yes)"
+                choice = click.prompt(
+                    f"    {prompt}", default="N", show_default=False,
+                ).strip().lower()
+                if choice in ("a", "all"):
+                    should_run = True
+                    if not touches_sudo:
+                        auto_yes = True
+                elif choice in ("q", "quit"):
+                    quit_early = True
+                    should_run = False
+                elif choice in ("y", "yes"):
+                    should_run = True
+                else:
+                    should_run = False
+
+            if should_run:
+                ok = doctor_mod.apply_fix(result, dry_run=dry_run)
+                if ok:
+                    applied += 1
+                    click.echo(success(f"    applied: {result.name}"))
+                else:
+                    click.echo(warning(f"    fix failed for {result.name}"))
+            else:
+                click.echo(dim(f"    skipped: {result.name}"))
+
+        click.echo("")
+        if applied:
+            click.echo(success(f"Applied {applied} fix(es). "
+                               f"Re-run `satdeploy doctor` to verify."))
+        else:
+            click.echo(dim("No fixes applied."))
         ctx = click.get_current_context()
-        ctx.exit(1)
+        ctx.exit(0 if applied == len(fixable) else 1)
+
+    click.echo(dim("Fix the ✗ lines above (or run `satdeploy doctor --fix`), "
+                   "then re-run `satdeploy doctor`."))
+    ctx = click.get_current_context()
+    ctx.exit(1)
 
 
 @main.command()

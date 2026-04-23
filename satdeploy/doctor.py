@@ -50,7 +50,13 @@ class CheckResult:
     name: str
     status: CheckStatus
     message: str
+    # Human-readable guidance shown next to the failure. May be advice
+    # prose ("Install openssh-client") or a concrete shell command.
     fix_cmd: Optional[str] = None
+    # Shell command that ``doctor --fix`` will actually execute. When None,
+    # the failure is guidance-only: user has to resolve it themselves
+    # (install a package, edit config, choose a path, etc.).
+    fix_shell: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -106,7 +112,8 @@ def check_ssh(ctx: DoctorContext) -> list[CheckResult]:
         return [CheckResult("ssh", CheckStatus.FAIL,
                             f"{user}@{host} — {stderr or 'connect failed'}",
                             fix_cmd=f"ssh-copy-id {user}@{host}"
-                                    f"   # if key auth isn't set up, or check ~/.ssh/config")]
+                                    f"   # if key auth isn't set up, or check ~/.ssh/config",
+                            fix_shell=f"ssh-copy-id {user}@{host}")]
     except subprocess.TimeoutExpired:
         return [CheckResult("ssh", CheckStatus.FAIL,
                             f"{user}@{host} — timeout after {_SSH_TIMEOUT_S}s",
@@ -141,10 +148,13 @@ def check_sudo(ctx: DoctorContext) -> list[CheckResult]:
         if proc.returncode == 0:
             return [CheckResult("sudo", CheckStatus.PASS,
                                 f"{user}@{host} — passwordless sudo OK")]
+        sudoers_line = f"{user} ALL=(ALL) NOPASSWD:ALL"
         return [CheckResult("sudo", CheckStatus.FAIL,
                             f"{user}@{host} — can't sudo without a password",
-                            fix_cmd=f"ssh {user}@{host} 'echo \"{user} ALL=(ALL) NOPASSWD:ALL\" "
-                                    f"| sudo tee /etc/sudoers.d/{user}'")]
+                            fix_cmd=f"ssh {user}@{host} 'echo \"{sudoers_line}\" "
+                                    f"| sudo tee /etc/sudoers.d/{user}'",
+                            fix_shell=f"ssh {user}@{host} 'echo \"{sudoers_line}\" "
+                                      f"| sudo tee /etc/sudoers.d/{user}'")]
     except (subprocess.TimeoutExpired, FileNotFoundError):
         return [CheckResult("sudo", CheckStatus.WARN,
                             "could not verify sudo (ssh failed earlier)",
@@ -166,13 +176,15 @@ def check_remote_backup_dir(ctx: DoctorContext) -> list[CheckResult]:
         # Distinguish "missing" vs "not writable" for a better fix hint.
         proc2 = _ssh_exec(user, host, f"test -d {q}")
         if proc2.returncode != 0:
+            mkdir_cmd = (f"ssh {user}@{host} "
+                         f"'sudo mkdir -p {q} && sudo chown {user}:{user} {q}'")
             return [CheckResult("remote_backup_dir", CheckStatus.FAIL,
                                 f"{backup} does not exist on {host}",
-                                fix_cmd=f"ssh {user}@{host} "
-                                        f"'sudo mkdir -p {q} && sudo chown {user}:{user} {q}'")]
+                                fix_cmd=mkdir_cmd, fix_shell=mkdir_cmd)]
+        chown_cmd = f"ssh {user}@{host} 'sudo chown {user}:{user} {q}'"
         return [CheckResult("remote_backup_dir", CheckStatus.FAIL,
                             f"{backup} exists but {user} can't write to it",
-                            fix_cmd=f"ssh {user}@{host} 'sudo chown {user}:{user} {q}'")]
+                            fix_cmd=chown_cmd, fix_shell=chown_cmd)]
     except (subprocess.TimeoutExpired, FileNotFoundError):
         return [CheckResult("remote_backup_dir", CheckStatus.WARN,
                             "could not verify (ssh unreachable)",
@@ -204,6 +216,7 @@ def check_local_files(ctx: DoctorContext) -> list[CheckResult]:
                 f"local[{app_name}]", CheckStatus.FAIL,
                 f"{local} is not readable",
                 fix_cmd=f"chmod +r {local}",
+                fix_shell=f"chmod +r {local}",
             ))
         else:
             size = local.stat().st_size
@@ -256,7 +269,8 @@ def check_watchdog(ctx: DoctorContext) -> list[CheckResult]:
     except ImportError:
         return [CheckResult("watchdog", CheckStatus.FAIL,
                             "watchdog not installed",
-                            fix_cmd="pip install 'watchdog>=3.0'")]
+                            fix_cmd="pip install 'watchdog>=3.0'",
+                            fix_shell="pip install 'watchdog>=3.0'")]
 
 
 def check_debuginfod_local(ctx: DoctorContext) -> list[CheckResult]:
@@ -281,9 +295,10 @@ def check_gdbserver_on_target(ctx: DoctorContext) -> list[CheckResult]:
             path = proc.stdout.decode("utf-8", errors="replace").strip()
             return [CheckResult("gdbserver", CheckStatus.PASS,
                                 f"{path} on {host}")]
+        gdb_install = f"ssh {user}@{host} 'sudo apt install -y gdbserver'"
         return [CheckResult("gdbserver", CheckStatus.FAIL,
                             f"gdbserver not installed on {host}",
-                            fix_cmd=f"ssh {user}@{host} 'sudo apt install gdbserver'")]
+                            fix_cmd=gdb_install, fix_shell=gdb_install)]
     except (subprocess.TimeoutExpired, FileNotFoundError):
         return [CheckResult("gdbserver", CheckStatus.WARN,
                             "could not verify (ssh unreachable)")]
@@ -355,6 +370,30 @@ class DoctorSummary:
     def ok(self) -> bool:
         """``True`` when every check passed or warned; ``False`` on any fail."""
         return self.failed == 0
+
+
+def apply_fix(result: CheckResult, *, dry_run: bool = False) -> bool:
+    """Execute ``result.fix_shell`` via the user's shell.
+
+    Stdin/stdout/stderr are inherited so ``ssh`` + ``sudo`` prompts work
+    naturally — the user types their password directly. Returns True if
+    the command exited 0 (or we were just dry-running). Returns False if
+    there was no shell command or the command failed.
+
+    Args:
+        result: A failing ``CheckResult`` to fix.
+        dry_run: If True, print the command and don't execute.
+    """
+    if not result.fix_shell:
+        return False
+    if dry_run:
+        print(f"    [dry-run] would run: {result.fix_shell}")
+        return True
+    try:
+        proc = subprocess.run(result.fix_shell, shell=True, check=False)
+        return proc.returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
 
 
 def run_doctor(

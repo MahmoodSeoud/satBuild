@@ -7,6 +7,7 @@ the CLI exit code.
 
 from __future__ import annotations
 
+import os
 import subprocess
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -397,3 +398,94 @@ apps:
     assert result.exit_code == 1
     assert "does not exist" in result.output
     assert "failed" in result.output
+
+
+# ---------------------------------------------------------------------------
+# apply_fix + --fix mode
+# ---------------------------------------------------------------------------
+
+def test_apply_fix_no_shell_returns_false():
+    r = CheckResult("foo", CheckStatus.FAIL, "some advice", fix_cmd="edit cfg manually")
+    assert doctor.apply_fix(r) is False
+
+
+def test_apply_fix_dry_run_returns_true(capsys):
+    r = CheckResult("foo", CheckStatus.FAIL, "bad perms",
+                    fix_cmd="chmod +r x", fix_shell="chmod +r /does/not/matter")
+    assert doctor.apply_fix(r, dry_run=True) is True
+    captured = capsys.readouterr()
+    assert "would run" in captured.out
+    assert "/does/not/matter" in captured.out
+
+
+def test_apply_fix_runs_shell_command(tmp_path):
+    """apply_fix actually executes the command. Use a harmless touch."""
+    marker = tmp_path / "apply-fix-marker"
+    r = CheckResult("touch", CheckStatus.FAIL, "x",
+                    fix_cmd=f"touch {marker}", fix_shell=f"touch {marker}")
+    assert doctor.apply_fix(r) is True
+    assert marker.exists()
+
+
+def test_apply_fix_returns_false_on_nonzero_exit():
+    r = CheckResult("bad", CheckStatus.FAIL, "x",
+                    fix_cmd="false", fix_shell="false")
+    assert doctor.apply_fix(r) is False
+
+
+@pytest.mark.skipif(os.getuid() == 0,
+                    reason="root bypasses chmod; can't simulate unreadable file")
+def test_cli_fix_dry_run_shows_would_run(tmp_path, tmp_binary):
+    """--fix --dry-run on a fixable failure (chmod case) prints "would run"
+    without actually touching the filesystem."""
+    unreadable = tmp_path / "noread"
+    unreadable.write_bytes(b"\x7fELF")
+    unreadable.chmod(0o000)  # no read perms — triggers check_local_files fail
+    try:
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(f"""
+name: demo
+transport: local
+target_dir: {tmp_path}/target
+backup_dir: {tmp_path}/backups
+apps:
+  controller:
+    local: {unreadable}
+    remote: /app/controller
+    service: null
+""")
+        runner = CliRunner()
+        result = runner.invoke(main, [
+            "doctor", "--config", str(config_file),
+            "--for", "iterate", "--fix", "--dry-run",
+        ], input="y\n")
+        assert "would run" in result.output
+        assert "chmod +r" in result.output
+    finally:
+        # Restore perms so pytest cleanup can delete.
+        unreadable.chmod(0o644)
+
+
+def test_cli_fix_no_runnable_fixes_exits_one(tmp_path):
+    """Failure where fix is guidance-only (no fix_shell) — --fix should
+    exit 1 and say "no auto-runnable fix". Missing-file case: the fix is
+    "edit the config or build the binary" (advice)."""
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text(f"""
+name: demo
+transport: local
+target_dir: {tmp_path}/target
+backup_dir: {tmp_path}/backups
+apps:
+  controller:
+    local: /does/not/exist/controller
+    remote: /app/controller
+    service: null
+""")
+    runner = CliRunner()
+    result = runner.invoke(main, [
+        "doctor", "--config", str(config_file), "--for", "iterate", "--fix",
+    ])
+    assert result.exit_code == 1
+    assert "no auto-runnable fix" in result.output.lower() \
+        or "No failing checks" in result.output
