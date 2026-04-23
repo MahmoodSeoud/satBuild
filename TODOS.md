@@ -243,19 +243,34 @@ positional args so `satdeploy deploy test_app -f /tmp/binary` and
 
 **Depends on:** Thesis submitted, first sat pilot case study ready.
 
-## satdeploy doctor (dependency check)
+## satdeploy doctor — version-compat checks (Phase 1 extension)
 
-**What:** `satdeploy doctor` command that checks all shell-out dependencies (bsdiff, bspatch, gdbserver, debuginfod, objdump, rsync) are installed and version-compatible. Prints install hints per platform.
+**What:** Extend `satdeploy doctor` (shipped 2026-04-23) with shell-out
+version-compatibility checks: bsdiff/bspatch version parity between host and
+agent, objdump/readelf feature availability, rsync version if used. Prints
+install hints per platform ("apt install gdb-multiarch elfutils bsdiff",
+"brew install binutils" etc).
 
-**Why:** Phase 0 adds 4-5 shell-outs which creates dependency-fragility surface. When first pilot installs satdeploy and one dependency is missing/old, cryptic shell failure is worse than typed error with install command. Surfaced in CEO review Section 10 (2026-04-18).
+**Why:** Phase 0 doctor checks *existence* of binaries (debuginfod, gdbserver,
+watchdog). Phase 1 should also check *version compatibility* — the bsdiff4 pin
+at 1.2.3 means a user on 1.2.4 gets patches that older bspatch rejects
+(eng-review landmine P0 #4). Catching that as a doctor warning is cheaper than
+catching it as a bricked flatsat.
 
-**Context:** Each dependency is called via `subprocess`. Centralize version/path detection in one module. Output like `apt install gdb-multiarch elfutils bsdiff`. Exit codes: 0 all good, 1 missing deps, 2 version issues.
+**Context:** Each dependency is called via `subprocess`. Add version probes in
+`satdeploy/doctor.py` (new check functions) — e.g., `check_bsdiff_version`,
+`check_bspatch_on_target`, `check_objdump_features`. Exit codes: 0 all good,
+1 missing deps, 2 version issues. CEO review Section 10 (2026-04-18) originally
+scoped this as its own command; doctor already owns the surface, so extensions
+land as new checks in the existing module.
 
 **Effort:** S (CC: ~30-45 min)
 
-**Priority:** P2 — reduces pilot onboarding friction
+**Priority:** P2 — reduces pilot onboarding friction. Ship after first pilot
+reports a version-skew failure.
 
-**Depends on:** Phase 0 shell-outs (bsdiff, debuginfod, etc.) shipped.
+**Depends on:** Phase 0 shell-outs (bsdiff, debuginfod, etc.) shipped —
+**satisfied 2026-04-23**.
 
 ## Cloud-hosted dashboard tier (Phase 1 SaaS)
 

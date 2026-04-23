@@ -278,6 +278,78 @@ thesis scope.
   authority with anyone on the net. Flag this explicitly in the dashboard's
   first-run banner.
 
+## Revision 2026-04-23 — DX audit (DX TRIAGE mode)
+
+Trigger: author's own hello-world attempt against a fresh Raspberry Pi ran ~75
+minutes with 4 failures before first successful iterate, and never reached the
+`iterate --debug` / gdb path that the design doc (line 17) calls the magical
+moment. `/devex-review` scored overall DX **3.5/10**, red-flag TTHW tier
+(≥10 min → 50-70% abandonment).
+
+Three critical gaps were scored < 5 in `/plan-devex-review`. Two shipped this
+session; one deferred.
+
+| Gap | Score | Fix | Status |
+|-----|-------|-----|--------|
+| Getting Started: README lies about `pipx install` + buries iterate/watch | 3/10 | README rewrite — lead with iterate/watch, honest install path | **SHIPPED** this session |
+| Error Messages: iterate fails deep inside transport with no pre-flight visibility | 4/10 | `satdeploy doctor [--for MODE]` pre-flight check command | **SHIPPED** this session |
+| Error Messages: double `✗` prefix on every typed error | 4/10 | single-✗ fix in `errors.py:format_message` + regression test | **SHIPPED** this session |
+| CHANGELOG missing → upgrade anxiety | 2/10 | CHANGELOG.md generated from git log | Deferred (TRIAGE skip; not blocking pilot) |
+| `init --with-sample` for zero-prereq hello world | — | dropped (TRIAGE) — `satdeploy demo` already covers the zero-prereq path |
+
+### `satdeploy doctor` scope (shipped 2026-04-23)
+
+Pre-flight check command that validates setup for a given workflow *before*
+iterate/push fails mid-flight with a cryptic transport-layer error.
+
+Signature:
+
+```
+satdeploy doctor [--for MODE] [APP...] [--target TARGET] [--config PATH]
+  MODE: all | iterate | watch | debug | push   (default: all)
+```
+
+Each check emits pass/warn/fail + an actionable `fix_cmd` on failure, reusing
+the typed-error convention from `satdeploy/errors.py`. Output is streamed so
+the user sees progress live. Exits 1 if any check fails.
+
+Checks shipped in MVP:
+- `config` — config loaded + valid
+- `ssh` — SSH connect + key auth (SSH transport only)
+- `sudo` — passwordless sudo on target (when any app has `service:`)
+- `remote_backup_dir` — exists + writable (missing → mkdir+chown fix; not
+  writable → chown fix)
+- `local[<app>]` — local file exists + readable
+- `service[<unit>]` — systemd unit loaded on target (per app with `service:`)
+- `watchdog` — library installed (mode=watch only)
+- `gdbserver` — on target (mode=debug only)
+- `debuginfod` — local binary (mode=debug only)
+- `sysroot` — `SATDEPLOY_SDK` set + directory exists (mode=debug only)
+
+Primary TTHW impact: the four Pi setup failures we hit live on 2026-04-23
+(sudo-password prompt, systemd unit missing, backup_dir wrong ownership,
+padding-forgot) would all have been caught by one `satdeploy doctor` call
+returning in ~2 seconds instead of ~30 seconds per failed iterate.
+
+The `--for debug` mode is the first surface that exposes the gdb path
+prereqs. The author never reached `iterate --debug` in this session
+because of 6 unguarded prerequisites; doctor concretizes them as a
+checklist the user can actually complete.
+
+Tests: 29 in `tests/test_doctor.py` covering each check function
+(via subprocess mocking for SSH), mode dispatch, orchestrator aggregation,
+and CLI exit code.
+
+### Phase 1 doctor extensions (deferred, P2)
+
+- `doctor --fix` — run the suggested `fix_cmd` commands interactively (careful:
+  confirmation gate before any `sudo` or destructive op)
+- `doctor --target all` — fan out doctor across every target in config; feeds
+  the fleet dashboard's "target health" panel
+- Kernel version / libc version check for ABI compatibility on target
+- `systemctl daemon-reload` hint in the `service[...]` check when the unit
+  file is stale
+
 ## R6 design spec (plan-design-review 2026-04-20)
 
 Design decisions locked before R6 implementation. Initial score 3/10 → 9/10 after
