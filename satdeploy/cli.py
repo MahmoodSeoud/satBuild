@@ -515,6 +515,11 @@ def init(config_path: Path | None):
     The Python CLI owns SSH + local transports. For CSP (DTP over CAN /
     radio, flight-hardware default), use satdeploy-apm inside CSH — see
     the README's "CSP: the C path" section.
+
+    DX review 2026-04-23 decision #2: prompt for the app's local/remote
+    paths during init so the written YAML is runnable as-is, instead of
+    emitting a placeholder that the user must vim-edit before the first
+    `satdeploy iterate` can succeed.
     """
     config = Config(config_path=config_path)
 
@@ -532,6 +537,31 @@ def init(config_path: Path | None):
     host = click.prompt("Target host (IP or hostname)")
     user = click.prompt("SSH user", default="root")
 
+    click.echo("")
+    click.echo(click.style("Configure your first app:", bold=True))
+    click.echo(dim("  You can add more later by editing the config. "
+                   "Paths that don't exist yet are fine — "
+                   "`satdeploy doctor` will flag them before iterate."))
+    app_name = click.prompt("App name", default="controller")
+    local_path = click.prompt("Local binary path")
+    remote_default = f"/opt/bin/{app_name}"
+    remote_path = click.prompt("Remote path on target", default=remote_default)
+    # Blank service = library / binary without a systemd unit. Common case
+    # for .so's and shared assets; explicit "" is semantically "no service"
+    # so we drop the key from the output YAML rather than write a sentinel.
+    service_name = click.prompt(
+        "systemd service name (leave blank for none)",
+        default="",
+        show_default=False,
+    ).strip()
+
+    app_config: dict = {
+        "local": local_path,
+        "remote": remote_path,
+    }
+    if service_name:
+        app_config["service"] = service_name
+
     data = {
         "name": name,
         "transport": "ssh",
@@ -539,13 +569,7 @@ def init(config_path: Path | None):
         "user": user,
         "backup_dir": "/opt/satdeploy/backups",
         "max_backups": 10,
-        "apps": {
-            "example_app": {
-                "local": "/path/to/build/example_app",
-                "remote": "/opt/app/bin/example_app",
-                "service": "example_app.service",
-            },
-        },
+        "apps": {app_name: app_config},
     }
 
     config.save(data)
@@ -560,14 +584,24 @@ def init(config_path: Path | None):
 
     click.echo("")
     click.echo(success(f"Config saved to {config.config_path}"))
+    # Nudge the user if the local path isn't there yet — no hard error,
+    # doctor will cover it. Silent when the binary already exists so we
+    # don't noise-up the happy path.
+    if not Path(local_path).exists():
+        click.echo(dim(
+            f"  Note: {local_path} doesn't exist yet. "
+            f"Build it (or adjust the path) before running iterate."
+        ))
     click.echo("")
     click.echo("Next steps:")
-    click.echo(f"  1. Edit {config.config_path} — replace example_app.local "
-               f"and .remote with real paths")
-    click.echo(f"  2. Set SATDEPLOY_SDK=/path/to/yocto-sdk  "
-               f"# optional, enables ABI check in iterate")
-    click.echo(f"  3. satdeploy iterate example_app  "
+    click.echo(f"  1. satdeploy doctor --for iterate {app_name}  "
+               f"# verify setup before iterate fails mid-flight")
+    click.echo(f"  2. satdeploy iterate {app_name}  "
                f"# edit-to-running in one command")
+    click.echo(dim(
+        f"     Optional: set SATDEPLOY_SDK=/path/to/yocto-sdk to enable "
+        f"the pre-upload ABI check."
+    ))
 
     _install_completion()
 
