@@ -9,6 +9,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
+#include <stdbool.h>
 #include <time.h>
 
 #include <csp/csp.h>
@@ -23,13 +24,61 @@
 #define DTP_DEFAULT_MTU          1024
 #define DTP_DEFAULT_THROUGHPUT   10000000  /* bytes/s — must be non-zero to avoid div-by-zero in compute_dtp_metrics */
 
+/* Maximum retry rounds for missing-interval re-requests.
+ * DTP's data path is connectionless (by design — see lib/dtp/README.rst).
+ * The protocol's reliability story is "ask again for what's missing," using
+ * request_meta.intervals[]. The protocol caps that at 8 intervals per request,
+ * so fragmented loss may need several rounds to fully patch. */
+#define DTP_MAX_RETRY_ROUNDS     8
+
 /* Context for file download */
 typedef struct {
     FILE *fp;
-    uint32_t bytes_written;
+    uint32_t bytes_written;     /* total fwrite bytes (may double-count overwrites) */
     uint32_t expected_size;
     int error;
+    /* Receive bitmap indexed by DTP packet sequence number. 1 bit per packet.
+     * Allocated in dtp_download_file() based on expected_size and effective MTU. */
+    uint8_t *recv_bitmap;
+    uint32_t nof_packets;       /* total packets expected (== bitmap_bits) */
+    uint16_t effective_mtu;     /* mtu - 8 (DTP header is 2 × uint32_t) */
 } download_ctx_t;
+
+static inline void mark_seq_received(download_ctx_t *ctx, uint32_t seq) {
+    if (seq >= ctx->nof_packets) return;
+    ctx->recv_bitmap[seq >> 3] |= (uint8_t)(1u << (seq & 7));
+}
+
+static inline int seq_is_received(const download_ctx_t *ctx, uint32_t seq) {
+    if (seq >= ctx->nof_packets) return 1;
+    return (ctx->recv_bitmap[seq >> 3] >> (seq & 7)) & 1;
+}
+
+/* Fill `out` with up to 8 missing-seq ranges. Returns count.
+ * Each interval is inclusive on both ends (matches DTP server semantics). */
+static uint8_t compute_missing_intervals(const download_ctx_t *ctx,
+                                         interval_t out[8]) {
+    uint8_t count = 0;
+    uint32_t i = 0;
+    while (count < 8 && i < ctx->nof_packets) {
+        while (i < ctx->nof_packets && seq_is_received(ctx, i)) i++;
+        if (i >= ctx->nof_packets) break;
+        uint32_t gap_start = i;
+        while (i < ctx->nof_packets && !seq_is_received(ctx, i)) i++;
+        out[count].start = gap_start;
+        out[count].end   = i - 1;
+        count++;
+    }
+    return count;
+}
+
+static uint32_t count_received_packets(const download_ctx_t *ctx) {
+    uint32_t n = 0;
+    for (uint32_t i = 0; i < ctx->nof_packets; i++) {
+        if (seq_is_received(ctx, i)) n++;
+    }
+    return n;
+}
 
 /**
  * DTP on_start callback - called when transfer begins.
@@ -65,7 +114,9 @@ static bool on_download_data(dtp_t *session, csp_packet_t *packet) {
     /* Use DTP helper to extract data info */
     dtp_on_data_info_t info = dtp_get_data_info(session, packet);
 
-    /* Seek to correct position and write */
+    /* Seek to correct position and write. fseek+fwrite at info.data_offset
+     * makes re-receiving the same packet a harmless no-op overwrite, which
+     * is what we want when re-requesting missing intervals. */
     if (fseek(ctx->fp, info.data_offset, SEEK_SET) != 0) {
         ctx->error = -1;
         return false;
@@ -78,6 +129,7 @@ static bool on_download_data(dtp_t *session, csp_packet_t *packet) {
     }
 
     ctx->bytes_written += written;
+    mark_seq_received(ctx, info.packet_sequence_number);
     return true;  /* Continue transfer */
 }
 
@@ -119,12 +171,30 @@ int dtp_download_file(uint32_t server_node, uint8_t payload_id,
         return -1;
     }
 
-    /* Setup download context */
+    /* Setup download context, including the receive bitmap.
+     * Effective payload per packet is (mtu - 8) — DTP prepends two 32-bit
+     * words (sequence + offset) to the CSP packet payload. */
+    uint16_t eff_mtu = (mtu > 8) ? (uint16_t)(mtu - 8) : 1;
+    uint32_t nof_packets = expected_size ? ((expected_size + eff_mtu - 1) / eff_mtu) : 0;
+    size_t bitmap_bytes = (nof_packets + 7) / 8;
+    uint8_t *bitmap = NULL;
+    if (bitmap_bytes > 0) {
+        bitmap = calloc(1, bitmap_bytes);
+        if (!bitmap) {
+            printf("\033[31m[dtp]    error: bitmap alloc failed (%zu bytes)\033[0m\n", bitmap_bytes);
+            fclose(fp);
+            return -1;
+        }
+    }
+
     download_ctx_t ctx = {
         .fp = fp,
         .bytes_written = 0,
         .expected_size = expected_size,
-        .error = 0
+        .error = 0,
+        .recv_bitmap = bitmap,
+        .nof_packets = nof_packets,
+        .effective_mtu = eff_mtu,
     };
 
     /* Use lower-level API: prepare session, set hooks, then start transfer.
@@ -181,41 +251,79 @@ int dtp_download_file(uint32_t server_node, uint8_t payload_id,
     };
     dtp_set_opt(session, DTP_SESSION_HOOKS_CFG, &hooks);
 
-    /* Now start the transfer — hooks are active */
+    /* First pass: ask for the whole payload (default intervals[0]=(0, UINT32_MAX)
+     * set by dtp_acquire_session). Then loop, recomputing missing intervals
+     * from the bitmap and re-issuing the transfer until the bitmap is full
+     * or DTP_MAX_RETRY_ROUNDS is exhausted. */
     int result = dtp_start_transfer(session);
+    int round = 0;
+    int hard_error = 0;
 
-    /* Cleanup */
+    while (ctx.recv_bitmap && ctx.error == 0 &&
+           round < DTP_MAX_RETRY_ROUNDS) {
+        if (result != DTP_OK && result != DTP_CANCELLED) {
+            /* Connection-level failure (no server, route gone, etc.).
+             * Retrying the same intervals on a transport that just rejected us
+             * is unlikely to help and risks an infinite loop, so bail. */
+            hard_error = result;
+            break;
+        }
+
+        uint32_t got = count_received_packets(&ctx);
+        if (got >= ctx.nof_packets) {
+            break;  /* full coverage */
+        }
+
+        interval_t gaps[8];
+        uint8_t n = compute_missing_intervals(&ctx, gaps);
+        if (n == 0) {
+            break;  /* shouldn't happen if got < nof_packets, but defensive */
+        }
+
+        printf("[dtp]    round %d: %u/%u packets received, re-requesting %u gap(s)\n",
+               round + 1, got, ctx.nof_packets, n);
+        for (uint8_t i = 0; i < n; i++) {
+            printf("[dtp]      gap %u: seq [%u..%u]\n", i, gaps[i].start, gaps[i].end);
+        }
+        fflush(stdout);
+
+        /* Patch the request_meta in place. dtp_start_transfer re-sends it on
+         * the META control socket each call, so the server picks up the new
+         * interval list for this round. */
+        for (uint8_t i = 0; i < n; i++) {
+            session->request_meta.intervals[i] = gaps[i];
+        }
+        session->request_meta.nof_intervals = n;
+
+        result = dtp_start_transfer(session);
+        round++;
+    }
+
+    /* Final coverage check from the bitmap — this is the source of truth,
+     * not bytes_written (which double-counts overlapping retransmissions). */
+    uint32_t got = ctx.recv_bitmap ? count_received_packets(&ctx) : 0;
+    bool fully_received = (ctx.nof_packets == 0) || (got >= ctx.nof_packets);
+
+    /* Cleanup (after all retries — we needed the session alive between rounds). */
     dtp_release_session(session);
     fclose(fp);
+    free(ctx.recv_bitmap);
 
     if (ctx.error != 0) {
         printf("\033[31m[dtp]    error: write failed\033[0m\n");
         return -1;
     }
-    /* Accept DTP_CANCELLED when all bytes were written — the DTP library
-       may report cancelled if bytes_received tracking diverges from
-       payload_size, even when the actual file data was fully written. */
-    if (result != DTP_OK && result != DTP_CANCELLED) {
-        printf("\033[31m[dtp]    error: download failed (status=%d)\033[0m\n", result);
+    if (hard_error) {
+        printf("\033[31m[dtp]    error: download failed (status=%d)\033[0m\n", hard_error);
         return -1;
     }
-    if (result == DTP_CANCELLED && expected_size > 0 && ctx.bytes_written == expected_size) {
-        /* transfer cancelled but byte count matches — proceed to checksum */
-        (void)0;
-    } else if (result != DTP_OK) {
-        printf("\033[31m[dtp]    error: incomplete (%u/%u bytes)\033[0m\n",
-               ctx.bytes_written, expected_size);
+    if (!fully_received) {
+        printf("\033[31m[dtp]    error: incomplete after %d retry round(s) (%u/%u packets)\033[0m\n",
+               round, got, ctx.nof_packets);
         return -1;
     }
 
-    /* Verify size if expected */
-    if (expected_size > 0 && ctx.bytes_written != expected_size) {
-        printf("\033[33m[dtp]    warning: expected %u bytes, got %u\033[0m\n",
-               expected_size, ctx.bytes_written);
-        return -1;
-    }
-
-    printf("[dtp]    complete (%u bytes)\n", ctx.bytes_written);
+    printf("[dtp]    complete (%u packets, %d retry round(s))\n", got, round);
     fflush(stdout);
     return 0;
 }
