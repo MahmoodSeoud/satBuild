@@ -33,12 +33,19 @@
 #include "output.h"
 
 #define SATDEPLOY_PORT 20
-#define DEFAULT_TIMEOUT 30000
+/* Long enough for the agent to complete a multi-hundred-MB DTP pull.
+ * Must exceed DTP_DEFAULT_TIMEOUT_S * 1000 with margin (500 MB at 3 MB/s
+ * is ~167 s on the wire, plus DTP setup, plus checksum). */
+#define DEFAULT_TIMEOUT 360000
 
-/* DTP defaults */
+/* DTP defaults.
+ * Throughput is intentionally conservative: at 10 MB/s with MTU 1024 the
+ * receiver fires ~9.8k packets/sec, exhausting CSP_BUFFER_COUNT (1000) on
+ * a localhost ZMQ loop and causing "RX zmq: Failed to get csp_buffer"
+ * drops mid-transfer. 3 MB/s keeps the buffer pool from saturating. */
 #define DTP_DEFAULT_MTU          1024
-#define DTP_DEFAULT_THROUGHPUT   10000000
-#define DTP_DEFAULT_TIMEOUT_S    60
+#define DTP_DEFAULT_THROUGHPUT   3000000
+#define DTP_DEFAULT_TIMEOUT_S    300
 
 /*
  * Tab completion for app names from config

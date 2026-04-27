@@ -8,7 +8,7 @@ project(
 		'b_lto=false',
 		'default_library=static',
 		'csp:packet_padding_bytes=42',
-		'csp:buffer_count=1000',
+		'csp:buffer_count=8192',
 		'csp:buffer_size=2048',
 		'csp:conn_max=20',
 		'csp:conn_rxqueue_len=1000',
