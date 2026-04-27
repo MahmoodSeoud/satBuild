@@ -1,5 +1,35 @@
 # TODOS
 
+## Auto Pass-Window Detection in APM
+
+**What:** Replace operator-driven retry (`satdeploy push <app>` each pass) with
+APM-side automatic resumption. APM heartbeat-pings the agent on a timer; on first
+ack after a gap, automatically resume any open transfer whose sidecar still exists
+on the agent.
+
+**Why:** Operator-driven retry is sufficient for the thesis contribution (proves
+cross-pass resume works) but is operationally tedious for unattended ground stations.
+A reliable auto-resume is the difference between "satdeploy is a research tool" and
+"satdeploy is a flight ops tool."
+
+**Context:** Deferred from /plan-eng-review on 2026-04-27 because automatic
+pass-window detection is a separate research problem (link-state estimation,
+doppler-aware scheduling, antenna controller integration) that would expand thesis
+scope past the resumable-transfer chapter. The deterministic-session-id +
+sidecar-state-file design we landed in this PR is exactly the substrate auto-resume
+needs to sit on top of: APM just needs to know when to call `satdeploy push <app>`
+again. Recommended approach: APM detects "agent reachable now, has a pending state
+file for app X" via a STATUS query, then auto-pushes. Avoid building a link-state
+predictor; piggyback on whatever pass-schedule the ground station already runs.
+
+**Effort:** M (human: ~3-5 days / CC: ~half day)
+
+**Priority:** P2 — after thesis evaluation chapter is written and the operator-driven
+flow has logged real numbers on the FlatSat.
+
+**Depends on:** Resumable DTP transfer (this PR). Existing pass-schedule source on
+the ground (cron? manifest file? ask DISCO-2 ops what they use today).
+
 ## C Unit Test Framework for satdeploy-agent
 
 **What:** Set up cmocka or Unity test framework for satdeploy-agent C code.
