@@ -137,7 +137,7 @@ static int get_file_size(const char *path, uint32_t *size_out)
 
 static int compute_checksum(const char *path, char *hash_out, size_t hash_size)
 {
-    if (hash_size < 9) {
+    if (hash_out == NULL || hash_size < HISTORY_MAX_HASH) {
         return -1;
     }
 
@@ -146,7 +146,6 @@ static int compute_checksum(const char *path, char *hash_out, size_t hash_size)
         return -1;
     }
 
-    /* SHA256 hash - first 8 hex chars, matches agent and ground station */
     sha256_ctx ctx;
     sha256_init(&ctx);
 
@@ -160,9 +159,38 @@ static int compute_checksum(const char *path, char *hash_out, size_t hash_size)
     unsigned char digest[32];
     sha256_final(&ctx, digest);
 
-    snprintf(hash_out, hash_size, "%02x%02x%02x%02x",
-             digest[0], digest[1], digest[2], digest[3]);
+    /* Full 32-byte SHA256 → 64 hex chars + NUL. Display still uses %.8s. */
+    for (int i = 0; i < 32; i++) {
+        snprintf(hash_out + (i * 2), 3, "%02x", digest[i]);
+    }
+    hash_out[64] = '\0';
     return 0;
+}
+
+/* Deterministic per-app DTP payload_id.
+ *
+ * libdtp's payload_id is a uint8_t (256 values). Using a global counter
+ * (next_payload_id++) gave each push a fresh slot, but the agent's resume
+ * lookup needs the same payload_id across passes — so the counter approach
+ * silently broke resume after csh restart or wrap-around.
+ *
+ * FNV-1a folded to 8 bits is the simplest deterministic mapping. Collisions
+ * are inevitable with 256 slots and many apps; the SHA256 verify on the agent
+ * is the safety net that catches a collision-induced wrong payload (mismatch
+ * → reject + unlink sidecar, fresh transfer next pass). The del-then-add
+ * pattern at the call site refreshes the registry contents on every push so
+ * the slot always holds the file we're about to send. */
+static uint8_t payload_id_for_app(const char *app_name)
+{
+    /* 32-bit FNV-1a, folded down to 8 bits via XOR. Avoid 0 as it is libdtp's
+     * "no payload" sentinel in some places. */
+    uint32_t h = 2166136261u;
+    for (const unsigned char *p = (const unsigned char *)app_name; *p; p++) {
+        h ^= *p;
+        h *= 16777619u;
+    }
+    uint8_t folded = (uint8_t)(h ^ (h >> 8) ^ (h >> 16) ^ (h >> 24));
+    return folded == 0 ? 1 : folded;
 }
 
 static int send_deploy_request(unsigned int node, Satdeploy__DeployRequest *req,
@@ -317,8 +345,6 @@ static void *dtp_server_thread(void *arg) {
     return NULL;
 }
 
-/* Payload ID counter */
-static uint8_t next_payload_id = 1;
 
 /**
  * Deploy a single app to the target node.
@@ -373,7 +399,7 @@ static int deploy_single_app(unsigned int node, char *app_name,
 
     /* Auto-compute size and checksum from local file */
     uint32_t file_size = 0;
-    char checksum[16] = {0};
+    char checksum[HISTORY_MAX_HASH] = {0};
 
     if (get_file_size(local_path, &file_size) < 0) {
         printf("Error: Cannot read file '%s'\n", local_path);
@@ -396,7 +422,7 @@ static int deploy_single_app(unsigned int node, char *app_name,
                 if (strcmp(status_resp->apps[i]->app_name, app_name) == 0) {
                     if (status_resp->apps[i]->file_hash &&
                         strcmp(status_resp->apps[i]->file_hash, checksum) == 0) {
-                        printf("Already deployed: %s (%s)\n", app_name, checksum);
+                        printf("Already deployed: %s (%.8s)\n", app_name, checksum);
                         satdeploy__deploy_response__free_unpacked(status_resp, NULL);
                         return SLASH_SUCCESS;
                     }
@@ -416,11 +442,17 @@ static int deploy_single_app(unsigned int node, char *app_name,
     printf("  Local:    %s\n", local_path);
     printf("  Remote:   %s\n", remote_path);
     printf("  Size:     %u bytes\n", file_size);
-    printf("  Checksum: %s\n", checksum);
+    printf("  Checksum: %.8s\n", checksum);
     printf("  Target:   node %u\n", node);
 
-    /* Step 1: Register the file as a DTP payload */
-    uint8_t payload_id = next_payload_id++;
+    /* Step 1: Register the file as a DTP payload.
+     *
+     * Deterministic FNV-8 of app_name as the payload_id, with del-then-add to
+     * refresh whatever's currently in that slot. This way the agent can map
+     * (app_name → payload_id) without an extra round-trip, and a re-staged
+     * binary correctly overwrites stale registry contents on the same slot. */
+    uint8_t payload_id = payload_id_for_app(app_name);
+    dtp_file_payload_del(payload_id);
     printf("[dtp] Registering payload id=%u file=%s\n", payload_id, local_path);
     fflush(stdout);
     if (!dtp_file_payload_add(payload_id, local_path)) {
@@ -514,7 +546,7 @@ static int deploy_single_app(unsigned int node, char *app_name,
     }
 
     char success_msg[256];
-    snprintf(success_msg, sizeof(success_msg), "Deployed %s (%s) via DTP", app_name, checksum);
+    snprintf(success_msg, sizeof(success_msg), "Deployed %s (%.8s) via DTP", app_name, checksum);
     output_success(success_msg);
 
     /* Record successful deploy to history.db */
@@ -761,29 +793,31 @@ static int satdeploy_rollback_cmd(struct slash *slash)
 
     /* Show which backup was restored */
     char success_msg[256];
-    char restored_hash[16] = {0};
+    char restored_hash[HISTORY_MAX_HASH] = {0};
     if (resp->backup_path && strlen(resp->backup_path) > 0) {
-        /* Extract hash from backup path - new format: <hash>.bak */
+        /* Backup filename format: YYYYMMDD-HHMMSS-<hash>.bak
+         * Extract the hash segment between the last '-' and ".bak". Accepts
+         * both legacy 8-char and current 64-char hashes (older backups won't
+         * disappear after the bump — they're addressable by their truncated
+         * hash). */
         const char *filename = strrchr(resp->backup_path, '/');
         filename = filename ? filename + 1 : resp->backup_path;
 
         size_t len = strlen(filename);
         if (len > 4 && strcmp(filename + len - 4, ".bak") == 0) {
-            /* Backup format: YYYYMMDD-HHMMSS-{hash8}.bak
-             * Extract hash from after the last '-' */
             const char *last_dash = strrchr(filename, '-');
             if (last_dash) {
-                last_dash++;  /* skip the '-' */
+                last_dash++;
                 size_t hash_len = (filename + len - 4) - last_dash;
-                if (hash_len > 0 && hash_len <= 8) {
-                    strncpy(restored_hash, last_dash, hash_len);
+                if (hash_len > 0 && hash_len < HISTORY_MAX_HASH) {
+                    memcpy(restored_hash, last_dash, hash_len);
                     restored_hash[hash_len] = '\0';
                 }
             }
         }
 
         if (restored_hash[0]) {
-            snprintf(success_msg, sizeof(success_msg), "Rolled back %s to %s",
+            snprintf(success_msg, sizeof(success_msg), "Rolled back %s to %.8s",
                      app_name, restored_hash);
         } else {
             snprintf(success_msg, sizeof(success_msg), "Rolled back %s", app_name);

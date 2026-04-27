@@ -75,13 +75,21 @@ void output_status_row(const char *app_name, const char *status,
         status_color = COLOR_YELLOW;
     }
 
-    /* Build hash column: "abcd1234 (main@deadbeef)" or just "abcd1234" */
+    /* Build hash column: "abcd1234 (main@deadbeef)" or just "abcd1234".
+     * The wire format carries the full 64-hex SHA256 now (needed for safe
+     * cross-pass DTP resume), but the table only shows the leading 8 chars
+     * to stay readable. */
+    char hash_short[16] = "-";
+    if (hash && hash[0]) {
+        size_t copy = strnlen(hash, 8);
+        memcpy(hash_short, hash, copy);
+        hash_short[copy] = '\0';
+    }
     char hash_col[64];
-    const char *h = hash ? hash : "-";
     if (provenance && provenance[0]) {
-        snprintf(hash_col, sizeof(hash_col), "%s (%s)", h, provenance);
+        snprintf(hash_col, sizeof(hash_col), "%s (%s)", hash_short, provenance);
     } else {
-        snprintf(hash_col, sizeof(hash_col), "%s", h);
+        snprintf(hash_col, sizeof(hash_col), "%s", hash_short);
     }
 
     printf("  %s%s%s %-*s\t%s%-*s%s\t%s%-10s%s\t%s%s%s\n",
@@ -115,9 +123,17 @@ void output_version_row(const char *hash, const char *timestamp, int is_deployed
         status_text = "backup";
     }
 
+    /* Truncate to 8-char display prefix (full hash is on the wire). */
+    char hash_short[16] = "-";
+    if (hash && hash[0]) {
+        size_t copy = strnlen(hash, 8);
+        memcpy(hash_short, hash, copy);
+        hash_short[copy] = '\0';
+    }
+
     printf("  %s%s%s %s%-*s%s\t%s%-*s%s\t%s%s%s\n",
            color, symbol, COLOR_RESET,
-           color, COL_HASH_WIDTH, hash ? hash : "-", COLOR_RESET,
+           color, COL_HASH_WIDTH, hash_short, COLOR_RESET,
            COLOR_BRIGHT_BLACK, COL_TIMESTAMP_WIDTH, timestamp ? timestamp : "-", COLOR_RESET,
            color, status_text, COLOR_RESET);
 }

@@ -17,7 +17,7 @@
 #include <openssl/evp.h>
 
 int compute_file_checksum(const char *path, char *hash_out, size_t hash_size) {
-    if (hash_size < 9) {
+    if (hash_out == NULL || hash_size < HASH_BUF_LEN) {
         return -1;
     }
 
@@ -26,7 +26,6 @@ int compute_file_checksum(const char *path, char *hash_out, size_t hash_size) {
         return -1;
     }
 
-    /* Compute SHA256 hash */
     EVP_MD_CTX *ctx = EVP_MD_CTX_new();
     if (ctx == NULL) {
         fclose(f);
@@ -54,13 +53,18 @@ int compute_file_checksum(const char *path, char *hash_out, size_t hash_size) {
     fclose(f);
 
     unsigned char digest[EVP_MAX_MD_SIZE];
-    unsigned int digest_len;
+    unsigned int digest_len = 0;
     EVP_DigestFinal_ex(ctx, digest, &digest_len);
     EVP_MD_CTX_free(ctx);
 
-    /* Format first 4 bytes (8 hex chars) to match ground station */
-    snprintf(hash_out, hash_size, "%02x%02x%02x%02x",
-             digest[0], digest[1], digest[2], digest[3]);
+    /* Full 32-byte SHA256 → 64 hex chars + NUL.
+     * Truncating to 8 chars on the wire was unsafe for cross-pass resume:
+     * an 8-char prefix collision lets a re-staged binary inherit a stale
+     * receive bitmap. Display still uses %.8s for readability. */
+    for (unsigned int i = 0; i < 32; i++) {
+        snprintf(hash_out + (i * 2), 3, "%02x", digest[i]);
+    }
+    hash_out[HASH_HEX_LEN] = '\0';
     return 0;
 }
 
@@ -141,7 +145,7 @@ int backup_create(const char *app_name, const char *src_path,
     }
 
     /* Compute checksum of source */
-    char hash[16];
+    char hash[HASH_BUF_LEN];
     if (compute_file_checksum(src_path, hash, sizeof(hash)) != 0) {
         return -1;
     }
@@ -168,7 +172,7 @@ int backup_create(const char *app_name, const char *src_path,
     /* Check if this hash already backed up - search by hash suffix */
     DIR *dir = opendir(backup_dir);
     if (dir != NULL) {
-        char hash_suffix[32];
+        char hash_suffix[HASH_BUF_LEN + 8]; /* "-<64hex>.bak" + NUL */
         snprintf(hash_suffix, sizeof(hash_suffix), "-%s.bak", hash);
         struct dirent *entry;
         while ((entry = readdir(dir)) != NULL) {
@@ -203,7 +207,7 @@ int backup_create(const char *app_name, const char *src_path,
         backup_path_out[backup_path_size - 1] = '\0';
     }
 
-    printf("[backup] backed up → %s\n", hash);
+    printf("[backup] backed up → %.8s\n", hash);
     fflush(stdout);
     return 0;
 }
@@ -286,11 +290,11 @@ static int parse_backup_filename(const char *filename, const char *full_path,
         return 0;
     }
 
-    /* Current format: YYYYMMDD-HHMMSS-hash */
+    /* Current format: YYYYMMDD-HHMMSS-hash (full 64-hex SHA256) */
     int year, mon, day, hour, min, sec;
-    char hash_buf[32];
+    char hash_buf[HASH_BUF_LEN];
 
-    if (sscanf(name, "%4d%2d%2d-%2d%2d%2d-%s",
+    if (sscanf(name, "%4d%2d%2d-%2d%2d%2d-%64s",
                &year, &mon, &day, &hour, &min, &sec, hash_buf) == 7) {
         if (version != NULL && version_size > 0) {
             snprintf(version, version_size, "%s", name);
@@ -332,7 +336,7 @@ int backup_list(const char *app_name, backup_list_callback callback, void *user_
             continue;
         }
 
-        char version[64], timestamp[32], hash[16], path[MAX_PATH_LEN];
+        char version[96], timestamp[32], hash[HASH_BUF_LEN], path[MAX_PATH_LEN];
         snprintf(path, sizeof(path), "%s/%s", backup_dir, entry->d_name);
 
         if (parse_backup_filename(entry->d_name, path, version, sizeof(version),

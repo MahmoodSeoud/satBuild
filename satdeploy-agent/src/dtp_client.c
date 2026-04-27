@@ -18,6 +18,7 @@
 #include <dtp/dtp_protocol.h>
 
 #include "satdeploy_agent.h"
+#include "session_state.h"
 
 /* DTP configuration defaults */
 #define DTP_DEFAULT_TIMEOUT_S    60
@@ -154,6 +155,7 @@ static void on_download_release(dtp_t *session) {
 
 int dtp_download_file(uint32_t server_node, uint8_t payload_id,
                       const char *dest_path, uint32_t expected_size,
+                      const char *expected_hash, const char *app_name,
                       uint16_t mtu, uint32_t throughput, uint8_t timeout) {
     if (dest_path == NULL) {
         return -1;
@@ -163,13 +165,6 @@ int dtp_download_file(uint32_t server_node, uint8_t payload_id,
     if (mtu == 0)        mtu = DTP_DEFAULT_MTU;
     if (throughput == 0) throughput = DTP_DEFAULT_THROUGHPUT;
     if (timeout == 0)    timeout = DTP_DEFAULT_TIMEOUT_S;
-
-    /* Open destination file */
-    FILE *fp = fopen(dest_path, "wb");
-    if (fp == NULL) {
-        printf("\033[31m[dtp]    error: failed to open %s\033[0m\n", dest_path);
-        return -1;
-    }
 
     /* Setup download context, including the receive bitmap.
      * Effective payload per packet is (mtu - 8) — DTP prepends two 32-bit
@@ -182,9 +177,52 @@ int dtp_download_file(uint32_t server_node, uint8_t payload_id,
         bitmap = calloc(1, bitmap_bytes);
         if (!bitmap) {
             printf("\033[31m[dtp]    error: bitmap alloc failed (%zu bytes)\033[0m\n", bitmap_bytes);
-            fclose(fp);
             return -1;
         }
+    }
+
+    /* Resolve the cross-pass state sidecar path. We attempt resume only when
+     * we have all of (app_name, expected_hash, non-zero size). Strict-equality
+     * load means a re-staged binary (different SHA256 for the same app) will
+     * blow away stale state instead of inheriting a poisoned bitmap. */
+    char state_path[640];
+    bool have_state_path = (app_name != NULL && expected_hash != NULL &&
+                            expected_size > 0 && bitmap_bytes > 0 &&
+                            session_state_path(app_name, state_path, sizeof(state_path)) == 0);
+
+    bool resumed = false;
+    if (have_state_path) {
+        if (session_state_load(state_path, expected_size, expected_hash,
+                               nof_packets, eff_mtu,
+                               bitmap, bitmap_bytes) == 1) {
+            resumed = true;
+        }
+    }
+
+    /* Open destination file. On resume we must NOT truncate — the previously
+     * received packet payloads at their byte offsets are the whole reason we
+     * persisted the bitmap. fseek+fwrite at the recorded offsets only works
+     * if the underlying bytes survive across the open(). */
+    FILE *fp = NULL;
+    if (resumed) {
+        fp = fopen(dest_path, "r+b");
+        if (fp == NULL) {
+            /* Sidecar referenced a temp file that no longer exists (operator
+             * cleaned /tmp, agent rebooted on tmpfs, etc.). Discard the state
+             * and start fresh. */
+            printf("[dtp]    sidecar present but %s missing — starting fresh\n", dest_path);
+            session_state_unlink(state_path);
+            memset(bitmap, 0, bitmap_bytes);
+            resumed = false;
+            fp = fopen(dest_path, "wb");
+        }
+    } else {
+        fp = fopen(dest_path, "wb");
+    }
+    if (fp == NULL) {
+        printf("\033[31m[dtp]    error: failed to open %s\033[0m\n", dest_path);
+        free(bitmap);
+        return -1;
     }
 
     download_ctx_t ctx = {
@@ -197,12 +235,17 @@ int dtp_download_file(uint32_t server_node, uint8_t payload_id,
         .effective_mtu = eff_mtu,
     };
 
-    /* Use lower-level API: prepare session, set hooks, then start transfer.
-       This ensures hooks are active during the transfer (unlike dtp_client_main
-       which calls dtp_start_transfer before hooks can be set). */
-    /* Generate unique session_id from time + counter to avoid stale packet confusion */
-    static uint32_t session_counter = 0;
-    uint32_t session_id = (uint32_t)time(NULL) ^ (++session_counter << 16);
+    /* Deterministic session_id: SHA256(app_name || ":" || expected_hash)[0:4].
+     * Stable across processes and reboots, so ground and agent agree without
+     * a negotiation step. Falls back to a time-based id when caller didn't
+     * supply identification (legacy callers). */
+    uint32_t session_id;
+    if (app_name && expected_hash) {
+        session_id = session_state_compute_id(app_name, expected_hash);
+    } else {
+        static uint32_t session_counter = 0;
+        session_id = (uint32_t)time(NULL) ^ (++session_counter << 16);
+    }
 
     dtp_t *session = dtp_prepare_session(
         server_node,
@@ -212,29 +255,15 @@ int dtp_download_file(uint32_t server_node, uint8_t payload_id,
         payload_id,
         NULL,              /* ctx - set below */
         mtu,
-        false,             /* resume */
+        false,             /* libdtp resume — we manage state ourselves via the bitmap */
         0                  /* keep_alive_interval */
     );
 
     if (session == NULL) {
         printf("\033[31m[dtp]    error: failed to create session\033[0m\n");
         fclose(fp);
+        free(ctx.recv_bitmap);
         return -1;
-    }
-
-    /* Debug: dump raw request_meta bytes */
-    {
-        printf("[dtp-debug] sizeof(dtp_meta_req_t)=%zu\n", sizeof(dtp_meta_req_t));
-        uint8_t *raw = (uint8_t *)&session->request_meta;
-        printf("[dtp-debug] request_meta raw:");
-        for (int i = 0; i < 16; i++) printf(" %02x", raw[i]);
-        printf("\n");
-        printf("[dtp-debug] throughput=%u nof_intervals=%u payload_id=%u mtu=%u\n",
-               session->request_meta.throughput,
-               session->request_meta.nof_intervals,
-               session->request_meta.payload_id,
-               session->request_meta.mtu);
-        fflush(stdout);
     }
 
     /* Set user context and hooks BEFORE starting the transfer */
@@ -251,52 +280,74 @@ int dtp_download_file(uint32_t server_node, uint8_t payload_id,
     };
     dtp_set_opt(session, DTP_SESSION_HOOKS_CFG, &hooks);
 
-    /* First pass: ask for the whole payload (default intervals[0]=(0, UINT32_MAX)
-     * set by dtp_acquire_session). Then loop, recomputing missing intervals
-     * from the bitmap and re-issuing the transfer until the bitmap is full
-     * or DTP_MAX_RETRY_ROUNDS is exhausted. */
-    int result = dtp_start_transfer(session);
+    /* If we resumed and already have full coverage from disk, skip the
+     * transfer entirely. Otherwise pre-patch request_meta so the very first
+     * dtp_start_transfer asks only for the gaps — without this, the default
+     * intervals[0]=(0, UINT32_MAX) would re-request the whole file and waste
+     * a pass-window's worth of bandwidth. */
+    uint32_t got_initial = ctx.recv_bitmap ? count_received_packets(&ctx) : 0;
+    bool already_complete = (ctx.nof_packets == 0) || (got_initial >= ctx.nof_packets);
+
+    if (resumed && !already_complete) {
+        interval_t gaps[8];
+        uint8_t n = compute_missing_intervals(&ctx, gaps);
+        if (n > 0) {
+            for (uint8_t i = 0; i < n; i++) {
+                session->request_meta.intervals[i] = gaps[i];
+            }
+            session->request_meta.nof_intervals = n;
+            printf("[dtp]    resume session=%08x: %u/%u packets from sidecar, requesting %u gap(s)\n",
+                   session_id, got_initial, ctx.nof_packets, n);
+            fflush(stdout);
+        }
+    }
+
+    int result = DTP_OK;
     int round = 0;
     int hard_error = 0;
 
-    while (ctx.recv_bitmap && ctx.error == 0 &&
-           round < DTP_MAX_RETRY_ROUNDS) {
-        if (result != DTP_OK && result != DTP_CANCELLED) {
-            /* Connection-level failure (no server, route gone, etc.).
-             * Retrying the same intervals on a transport that just rejected us
-             * is unlikely to help and risks an infinite loop, so bail. */
-            hard_error = result;
-            break;
-        }
-
-        uint32_t got = count_received_packets(&ctx);
-        if (got >= ctx.nof_packets) {
-            break;  /* full coverage */
-        }
-
-        interval_t gaps[8];
-        uint8_t n = compute_missing_intervals(&ctx, gaps);
-        if (n == 0) {
-            break;  /* shouldn't happen if got < nof_packets, but defensive */
-        }
-
-        printf("[dtp]    round %d: %u/%u packets received, re-requesting %u gap(s)\n",
-               round + 1, got, ctx.nof_packets, n);
-        for (uint8_t i = 0; i < n; i++) {
-            printf("[dtp]      gap %u: seq [%u..%u]\n", i, gaps[i].start, gaps[i].end);
-        }
-        fflush(stdout);
-
-        /* Patch the request_meta in place. dtp_start_transfer re-sends it on
-         * the META control socket each call, so the server picks up the new
-         * interval list for this round. */
-        for (uint8_t i = 0; i < n; i++) {
-            session->request_meta.intervals[i] = gaps[i];
-        }
-        session->request_meta.nof_intervals = n;
-
+    if (!already_complete) {
         result = dtp_start_transfer(session);
-        round++;
+
+        while (ctx.recv_bitmap && ctx.error == 0 &&
+               round < DTP_MAX_RETRY_ROUNDS) {
+            if (result != DTP_OK && result != DTP_CANCELLED) {
+                /* Connection-level failure (no server, route gone, etc.).
+                 * Retrying the same intervals on a transport that just rejected us
+                 * is unlikely to help and risks an infinite loop, so bail. */
+                hard_error = result;
+                break;
+            }
+
+            uint32_t got = count_received_packets(&ctx);
+            if (got >= ctx.nof_packets) {
+                break;  /* full coverage */
+            }
+
+            interval_t gaps[8];
+            uint8_t n = compute_missing_intervals(&ctx, gaps);
+            if (n == 0) {
+                break;  /* shouldn't happen if got < nof_packets, but defensive */
+            }
+
+            printf("[dtp]    round %d: %u/%u packets received, re-requesting %u gap(s)\n",
+                   round + 1, got, ctx.nof_packets, n);
+            for (uint8_t i = 0; i < n; i++) {
+                printf("[dtp]      gap %u: seq [%u..%u]\n", i, gaps[i].start, gaps[i].end);
+            }
+            fflush(stdout);
+
+            /* Patch the request_meta in place. dtp_start_transfer re-sends it on
+             * the META control socket each call, so the server picks up the new
+             * interval list for this round. */
+            for (uint8_t i = 0; i < n; i++) {
+                session->request_meta.intervals[i] = gaps[i];
+            }
+            session->request_meta.nof_intervals = n;
+
+            result = dtp_start_transfer(session);
+            round++;
+        }
     }
 
     /* Final coverage check from the bitmap — this is the source of truth,
@@ -306,7 +357,43 @@ int dtp_download_file(uint32_t server_node, uint8_t payload_id,
 
     /* Cleanup (after all retries — we needed the session alive between rounds). */
     dtp_release_session(session);
-    fclose(fp);
+
+    /* fflush+fsync before persisting the bitmap so the on-disk file actually
+     * contains the bytes the bitmap claims. Otherwise resume could return
+     * "yes you already received seq N" while the destination still holds
+     * page-cache or zero-fill at that offset. */
+    if (fp != NULL) {
+        fflush(fp);
+        int fd = fileno(fp);
+        if (fd >= 0) {
+            (void)fsync(fd);
+        }
+        fclose(fp);
+    }
+
+    /* Sidecar lifecycle:
+     *   - write error (ctx.error) → corrupt on-disk file, do nothing; the
+     *     temp will be unlinked by the deploy_handler error path
+     *   - full success → unlink (next deploy starts clean)
+     *   - partial coverage (with or without hard_error) → save the bitmap
+     *     so the next pass for the same (app, hash) picks up the gaps. We
+     *     deliberately persist on hard_error too: a UHF link drop mid-pass
+     *     is the canonical case this whole feature exists for. */
+    if (have_state_path && ctx.error == 0) {
+        if (fully_received) {
+            session_state_unlink(state_path);
+        } else if (ctx.recv_bitmap && got > 0) {
+            int rc = session_state_save(state_path, expected_size, expected_hash,
+                                        ctx.nof_packets, ctx.effective_mtu,
+                                        ctx.recv_bitmap, bitmap_bytes);
+            if (rc == 0) {
+                printf("[dtp]    persisted %u/%u packets to %s for next pass\n",
+                       got, ctx.nof_packets, state_path);
+                fflush(stdout);
+            }
+        }
+    }
+
     free(ctx.recv_bitmap);
 
     if (ctx.error != 0) {
@@ -318,12 +405,13 @@ int dtp_download_file(uint32_t server_node, uint8_t payload_id,
         return -1;
     }
     if (!fully_received) {
-        printf("\033[31m[dtp]    error: incomplete after %d retry round(s) (%u/%u packets)\033[0m\n",
+        printf("\033[31m[dtp]    error: incomplete after %d retry round(s) (%u/%u packets) — state saved for resume\033[0m\n",
                round, got, ctx.nof_packets);
         return -1;
     }
 
-    printf("[dtp]    complete (%u packets, %d retry round(s))\n", got, round);
+    printf("[dtp]    complete (%u packets, %d retry round(s)%s)\n",
+           got, round, resumed ? ", resumed" : "");
     fflush(stdout);
     return 0;
 }

@@ -43,7 +43,7 @@ typedef struct {
     char app_name[MAX_APP_NAME_LEN];
     char remote_path[MAX_PATH_LEN];
     char temp_path[MAX_PATH_LEN];
-    char expected_checksum[16];
+    char expected_checksum[HASH_BUF_LEN];
     uint32_t expected_size;
     uint32_t received_size;
     uint32_t next_chunk;
@@ -216,9 +216,11 @@ static void status_metadata_callback(const char *app_name, const char *remote_pa
 
     if (ctx->count >= ctx->max) return;
 
-    /* Verify file actually exists - skip if missing */
-    static char hash_buf[32][16];
-    if (compute_file_checksum(remote_path, hash_buf[ctx->count], 16) != 0) {
+    /* Verify file actually exists - skip if missing.
+     * One hash slot per status entry — strings are stuffed into the response
+     * as borrowed pointers, so they must outlive the protobuf serialization. */
+    static char hash_buf[32][HASH_BUF_LEN];
+    if (compute_file_checksum(remote_path, hash_buf[ctx->count], HASH_BUF_LEN) != 0) {
         /* File missing or unreadable - don't include in status */
         printf("[deploy] Skipping %s: file missing at %s\n", app_name, remote_path);
         return;
@@ -400,8 +402,8 @@ static void handle_list_versions(const Satdeploy__DeployRequest *req,
     int result = backup_list(req->app_name, backup_collect_callback, &col);
 
     /* Get currently deployed version */
-    char remote_path[MAX_PATH_LEN], file_hash[16], deployed_at[32];
-    char actual_hash[16] = {0};
+    char remote_path[MAX_PATH_LEN], file_hash[HASH_BUF_LEN], deployed_at[32];
+    char actual_hash[HASH_BUF_LEN] = {0};
     int have_current = 0;
 
     if (app_metadata_get(req->app_name, remote_path, sizeof(remote_path),
@@ -482,7 +484,7 @@ static void handle_list_versions(const Satdeploy__DeployRequest *req,
 #define MAX_DIAL_ENTRIES 32
 
 typedef struct {
-    char hash[16];
+    char hash[HASH_BUF_LEN];
     char path[MAX_PATH_LEN];
     time_t mtime;  /* File modification time for chronological ordering */
 } backup_entry_t;
@@ -552,7 +554,7 @@ static void handle_rollback(const Satdeploy__DeployRequest *req,
     }
 
     /* Get current deployed hash */
-    char current_hash[16] = {0};
+    char current_hash[HASH_BUF_LEN] = {0};
     compute_file_checksum(remote_path, current_hash, sizeof(current_hash));
 
     /* Collect all backups (single filesystem traversal) */
@@ -651,7 +653,7 @@ static void handle_rollback(const Satdeploy__DeployRequest *req,
 
     /* Update metadata - trust the hash we already know, don't recompute */
     app_metadata_save(req->app_name, remote_path, selected->hash);
-    printf("\033[32m[deploy] %s → rolled back to %s\033[0m\n", req->app_name, selected->hash);
+    printf("\033[32m[deploy] %s → rolled back to %.8s\033[0m\n", req->app_name, selected->hash);
     fflush(stdout);
 
     /* Return the backup path that was restored */
@@ -715,6 +717,7 @@ static void handle_deploy(const Satdeploy__DeployRequest *req,
 
     if (dtp_download_file(req->dtp_server_node, req->payload_id,
                           temp_path, req->expected_size,
+                          req->expected_checksum, req->app_name,
                           req->dtp_mtu, req->dtp_throughput,
                           req->dtp_timeout) != 0) {
         resp->success = 0;
@@ -726,7 +729,7 @@ static void handle_deploy(const Satdeploy__DeployRequest *req,
 
     /* Verify checksum */
     if (req->expected_checksum != NULL && strlen(req->expected_checksum) > 0) {
-        static char actual_checksum[16];
+        static char actual_checksum[HASH_BUF_LEN];
         if (compute_file_checksum(temp_path, actual_checksum, sizeof(actual_checksum)) != 0) {
             resp->success = 0;
             resp->error_code = SATDEPLOY__DEPLOY_ERROR__ERR_CHECKSUM_MISMATCH;
@@ -736,7 +739,7 @@ static void handle_deploy(const Satdeploy__DeployRequest *req,
         }
 
         if (strcmp(actual_checksum, req->expected_checksum) != 0) {
-            printf("\033[31m[deploy] checksum mismatch: expected=%s actual=%s\033[0m\n",
+            printf("\033[31m[deploy] checksum mismatch: expected=%.8s actual=%.8s\033[0m\n",
                    req->expected_checksum, actual_checksum);
             resp->success = 0;
             resp->error_code = SATDEPLOY__DEPLOY_ERROR__ERR_CHECKSUM_MISMATCH;
@@ -744,7 +747,7 @@ static void handle_deploy(const Satdeploy__DeployRequest *req,
             unlink(temp_path);
             return;
         }
-        printf("[deploy] checksum ok: %s\n", actual_checksum);
+        printf("[deploy] checksum ok: %.8s\n", actual_checksum);
         fflush(stdout);
     }
 
@@ -934,7 +937,7 @@ static void handle_upload_end(const Satdeploy__DeployRequest *req,
 
     /* Verify checksum */
     if (upload_session.expected_checksum[0]) {
-        static char actual_checksum[16];
+        static char actual_checksum[HASH_BUF_LEN];
         if (compute_file_checksum(upload_session.temp_path, actual_checksum,
                                   sizeof(actual_checksum)) != 0) {
             upload_session_reset();
@@ -945,7 +948,7 @@ static void handle_upload_end(const Satdeploy__DeployRequest *req,
         }
 
         if (strcmp(actual_checksum, upload_session.expected_checksum) != 0) {
-            printf("[deploy] Checksum mismatch: expected=%s, actual=%s\n",
+            printf("[deploy] Checksum mismatch: expected=%.8s, actual=%.8s\n",
                    upload_session.expected_checksum, actual_checksum);
             upload_session_reset();
             resp->success = 0;
@@ -953,7 +956,7 @@ static void handle_upload_end(const Satdeploy__DeployRequest *req,
             resp->error_message = "Checksum mismatch";
             return;
         }
-        printf("[deploy] Checksum verified: %s\n", actual_checksum);
+        printf("[deploy] Checksum verified: %.8s\n", actual_checksum);
     }
 
     /* Backup existing file if present */
