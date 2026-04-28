@@ -164,11 +164,12 @@ int deploy_handler_init(void) {
     /* Bind socket to deploy port */
     if (csp_bind(&deploy_socket, DEPLOY_PORT) != CSP_ERR_NONE) {
         printf("[deploy] Failed to bind to port %d\n", DEPLOY_PORT);
+        printf("[deploy]   another agent on this CSP node? check `pgrep satdeploy-agent`\n");
         return -1;
     }
 
     if (csp_listen(&deploy_socket, 10) != CSP_ERR_NONE) {
-        printf("[deploy] Failed to listen on socket\n");
+        printf("[deploy] Failed to listen on socket (port %d already accepted but listen rejected)\n", DEPLOY_PORT);
         return -1;
     }
 
