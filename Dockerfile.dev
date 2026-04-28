@@ -27,9 +27,10 @@ ENV LANG=C.UTF-8
 
 # Build deps + dev quality-of-life. zmqproxy is built from the libcsp source
 # tree (lib/csp/utils/zmqproxy.c), not an apt package — don't add one.
+# CSH-specific deps included: libcurl4-openssl-dev, libelf-dev, libbsd-dev,
+# can-utils, fonts-powerline (per spaceinventor/csh README).
 RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential \
-        meson \
         ninja-build \
         pkg-config \
         libssl-dev \
@@ -39,6 +40,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         protobuf-c-compiler \
         libyaml-dev \
         libsqlite3-dev \
+        libcurl4-openssl-dev \
+        libelf-dev \
+        libbsd-dev \
+        can-utils \
+        fonts-powerline \
         tmux \
         vim \
         nano \
@@ -64,8 +70,40 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         sudo \
         bash-completion \
         python3 \
+        python3-dev \
         python3-pip \
+        pipx \
     && rm -rf /var/lib/apt/lists/*
+
+# CSH's meson.build requires meson_version >= 1.6, but Ubuntu 24.04 ships 1.3.
+# Install a recent meson via pip globally (--break-system-packages bypasses
+# PEP 668; safe in a container). satdeploy-agent + apm build fine with the
+# newer meson.
+RUN pip3 install --break-system-packages meson \
+    && meson --version
+
+# Build CSH from source. Pinned to HEAD by default; override with
+# --build-arg CSH_REF=<commit-or-tag>. The CSP submodule version that CSH
+# pulls in must match the APM's libcsp version (per CLAUDE.md): linking the
+# static CSP lib in the APM would normally embed uninitialized globals that
+# shadow CSH's, but the APM's meson.build uses partial_dependency to take
+# headers only, sidestepping the issue. Even so, struct layout has to match
+# at runtime — if you bump the APM's lib/csp submodule, rebuild CSH against
+# the matching ref by passing --build-arg CSH_REF=<that-ref>.
+ARG CSH_REF=HEAD
+RUN git clone --recurse-submodules https://github.com/spaceinventor/csh.git /opt/csh \
+    && cd /opt/csh \
+    && if [ "$CSH_REF" != "HEAD" ]; then \
+           git fetch --depth 50 origin "$CSH_REF" \
+        && git checkout "$CSH_REF" \
+        && git submodule update --init --recursive ; \
+       fi \
+    && meson setup builddir \
+    && ninja -C builddir \
+    && ln -s /opt/csh/builddir/csh /usr/local/bin/csh \
+    && ln -s /opt/csh/builddir/zmqproxy /usr/local/bin/zmqproxy \
+    && mkdir -p /root/.local/lib/csh \
+    && test -x /usr/local/bin/csh && test -x /usr/local/bin/zmqproxy
 
 # Functions + aliases live in /etc/profile.d so they load for both login
 # shells (`bash -lc ...`) and interactive shells. Aliases on their own only
@@ -80,6 +118,8 @@ agent()       { ./satdeploy-agent/build-native/satdeploy-agent "$@"; }
 build-agent() { meson setup satdeploy-agent/build-native satdeploy-agent --reconfigure && ninja -C satdeploy-agent/build-native; }
 build-apm()   { meson setup satdeploy-apm/build satdeploy-apm --reconfigure && ninja -C satdeploy-apm/build; }
 build-all()   { build-agent && build-apm; }
+# After building the APM, install it where csh dlopens APMs from.
+install-apm() { build-apm && cp satdeploy-apm/build/libcsh_satdeploy_apm.so /root/.local/lib/csh/ && echo "installed: /root/.local/lib/csh/libcsh_satdeploy_apm.so"; }
 PRF
 
 # Make interactive shells also pick up the profile.d script (Ubuntu's
@@ -97,8 +137,20 @@ cat <<EOF
    build-agent           — meson setup + ninja for the agent
    build-apm             — meson setup + ninja for the APM
    build-all             — both
+   install-apm           — build APM + copy to ~/.local/lib/csh/
    agent --version       — shorthand for the built agent binary
+   csh                   — CSP shell (dlopens APMs from ~/.local/lib/csh/)
+   zmqproxy              — CSP ZMQ broker (built alongside CSH)
    tmux                  — multi-pane terminal
+
+ Workflow for end-to-end CSP test:
+   tmux                                     # split window
+   pane 1: zmqproxy                         # CSP localhost transport
+   pane 2: agent -i ZMQ -p localhost -a 5425
+   pane 3: install-apm && csh
+                csh> apm load
+                csh> satdeploy status -n 5425
+                csh> satdeploy push controller
 
  Native build is x86_64 (or arm64 on Apple Silicon Docker) — fine for
  verification, NEVER for flight. Real flight builds go through Yocto.
