@@ -105,21 +105,14 @@ RUN git clone --recurse-submodules https://github.com/spaceinventor/csh.git /opt
     && mkdir -p /root/.local/lib/csh \
     && test -x /usr/local/bin/csh && test -x /usr/local/bin/zmqproxy
 
-# Functions + aliases live in /etc/profile.d so they load for both login
-# shells (`bash -lc ...`) and interactive shells. Aliases on their own only
-# expand in interactive shells, hence functions for the build helpers.
+# The dev shell helpers live in scripts/dev-shell.sh in the repo so they can
+# be tweaked without a docker rebuild — the volume mount makes host edits
+# immediately available inside the container. The /etc/profile.d entry just
+# sources that file (with a fallback if the volume isn't mounted).
 RUN cat >/etc/profile.d/satdeploy.sh <<'PRF'
-# ---- satdeploy dev shell ----
-export PS1='\[\e[1;32m\]satdeploy-dev\[\e[0m\]:\[\e[1;34m\]\w\[\e[0m\]$ '
-export EDITOR=vim
-alias ll='ls -lah --color=auto'
-alias g='git'
-agent()       { ./satdeploy-agent/build-native/satdeploy-agent "$@"; }
-build-agent() { meson setup satdeploy-agent/build-native satdeploy-agent --reconfigure && ninja -C satdeploy-agent/build-native; }
-build-apm()   { meson setup satdeploy-apm/build satdeploy-apm --reconfigure && ninja -C satdeploy-apm/build; }
-build-all()   { build-agent && build-apm; }
-# After building the APM, install it where csh dlopens APMs from.
-install-apm() { build-apm && cp satdeploy-apm/build/libcsh_satdeploy_apm.so /root/.local/lib/csh/ && echo "installed: /root/.local/lib/csh/libcsh_satdeploy_apm.so"; }
+if [ -r /satdeploy/scripts/dev-shell.sh ]; then
+    . /satdeploy/scripts/dev-shell.sh
+fi
 PRF
 
 # Make interactive shells also pick up the profile.d script (Ubuntu's
@@ -134,12 +127,12 @@ cat <<EOF
 ─────────────────────────────────────────────────────
  satdeploy dev container
    /satdeploy            — your repo (live-mounted from the Mac)
-   build-agent           — meson setup + ninja for the agent
-   build-apm             — meson setup + ninja for the APM
+   build-agent           — meson + ninja for the agent
+   build-apm             — meson + ninja for the APM (auto-installs the .so)
    build-all             — both
-   install-apm           — build APM + copy to ~/.local/lib/csh/
    agent --version       — shorthand for the built agent binary
    csh                   — CSP shell (dlopens APMs from ~/.local/lib/csh/)
+   csh-zmq               — csh -i /satdeploy/init/zmq.csh (CSP-on-ZMQ ground)
    zmqproxy              — CSP ZMQ broker (built alongside CSH)
    tmux                  — multi-pane terminal
 
@@ -147,7 +140,7 @@ cat <<EOF
    tmux                                     # split window
    pane 1: zmqproxy                         # CSP localhost transport
    pane 2: agent -i ZMQ -p localhost -a 5425
-   pane 3: install-apm && csh
+   pane 3: build-apm && csh-zmq
                 csh> apm load
                 csh> satdeploy status -n 5425
                 csh> satdeploy push controller
