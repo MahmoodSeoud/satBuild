@@ -1187,6 +1187,18 @@ static int satdeploy_help_cmd(struct slash *slash)
     printf("  rollback  Rollback to a previous version.\n");
     printf("  status    Show status of deployed apps and services.\n");
     printf("  version   Show APM version.\n");
+    printf("\n");
+    printf("Quick recipes:\n");
+    printf("  satdeploy push controller            # deploy one app from config\n");
+    printf("  satdeploy push -a                    # deploy every app\n");
+    printf("  satdeploy push -f ./bin/foo -r /opt/foo   # ad-hoc, no config entry\n");
+    printf("  satdeploy status                     # what's running on the target\n");
+    printf("  satdeploy list controller            # versions: deployed + backups\n");
+    printf("  satdeploy rollback controller        # back one version\n");
+    printf("  satdeploy logs controller -l 50      # last 50 service log lines\n");
+    printf("\n");
+    printf("Use -n <node> on any command to target a different CSP node.\n");
+    printf("Full reference: https://github.com/MahmoodSeoud/satDeploy/blob/main/docs/commands.md\n");
     return SLASH_SUCCESS;
 }
 
