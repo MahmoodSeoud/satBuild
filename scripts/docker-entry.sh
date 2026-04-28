@@ -28,6 +28,22 @@ cd /satdeploy
 echo ">>> Pre-building agent + APM (one-time per container start)"
 build-all
 
+echo ">>> Generating test apps (hello / controller / telemetry / payload)"
+scripts/make-test-apps.sh
+
+# Drop in the test config if the user hasn't created one yet. Doesn't
+# clobber an existing config — the user can rerun `satdeploy init` to
+# replace it interactively.
+if [ ! -f /root/.satdeploy/config.yaml ]; then
+    echo ">>> Installing /root/.satdeploy/config.yaml from init/test-config.yaml"
+    mkdir -p /root/.satdeploy
+    cp /satdeploy/init/test-config.yaml /root/.satdeploy/config.yaml
+fi
+
+# Make sure the agent's deploy targets directory exists. Agent will write
+# files there when push commands land.
+mkdir -p /tmp/satdeploy-target /tmp/satdeploy-backups
+
 # Start zmqproxy in the background. Logs land in /tmp so they don't
 # clutter the panes; tail them with: tail -f /tmp/zmqproxy.log
 echo ">>> Starting zmqproxy in background"
