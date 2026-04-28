@@ -5,7 +5,8 @@ project(
 	subproject_dir: 'lib',
 	default_options: [
 		'c_std=gnu11',
-		'b_lto=false',
+		'b_lto=true',
+		'b_ndebug=if-release',
 		'default_library=static',
 		'csp:packet_padding_bytes=42',
 		'csp:buffer_count=8192',
@@ -73,6 +74,19 @@ satdeploy_agent = executable(
 	include_directories: dirs,
 	dependencies: deps,
 	install: true,
-	c_args: ['-g2', '-O0', '-Wall', '-Wextra'],
-	link_args: ['-ldl'],
+	c_args: [
+		'-Os',
+		'-Wall', '-Wextra',
+		'-ffunction-sections',
+		'-fdata-sections',
+		'-fvisibility=hidden',
+		'-fno-asynchronous-unwind-tables',
+		'-fno-unwind-tables',
+	],
+	link_args: [
+		'-ldl',
+		'-Wl,--gc-sections',
+		'-Wl,--build-id=none',
+		'-Wl,-s',
+	],
 )
