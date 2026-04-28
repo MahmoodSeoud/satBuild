@@ -31,6 +31,7 @@
 #include "config.h"
 #include "history.h"
 #include "output.h"
+#include "version.h"
 
 #define SATDEPLOY_PORT 20
 /* Long enough for the agent to complete a multi-hundred-MB DTP pull.
@@ -1156,6 +1157,13 @@ static int satdeploy_init_cmd(struct slash *slash)
     return SLASH_SUCCESS;
 }
 
+static int satdeploy_version_cmd(struct slash *slash)
+{
+    (void)slash;
+    printf("satdeploy-apm %s (%s)\n", SATDEPLOY_VERSION, SATDEPLOY_GIT_REV);
+    return SLASH_SUCCESS;
+}
+
 static int satdeploy_help_cmd(struct slash *slash)
 {
     (void)slash;
@@ -1168,6 +1176,7 @@ static int satdeploy_help_cmd(struct slash *slash)
     printf("  push      Deploy one or more apps to a target.\n");
     printf("  rollback  Rollback to a previous version.\n");
     printf("  status    Show status of deployed apps and services.\n");
+    printf("  version   Show APM version.\n");
     return SLASH_SUCCESS;
 }
 
@@ -1180,3 +1189,4 @@ slash_command_sub_completer(satdeploy, list, satdeploy_list_cmd, app_name_comple
 slash_command_sub_completer(satdeploy, logs, satdeploy_logs_cmd, app_name_completer, "<app> [-l lines]", "Show logs for an app's service.");
 slash_command_sub_completer(satdeploy, rollback, satdeploy_rollback_cmd, app_name_completer, "<app> [-H hash]", "Rollback to a previous version.");
 slash_command_sub(satdeploy, status, satdeploy_status_cmd, NULL, "Show status of deployed apps and services.");
+slash_command_sub(satdeploy, version, satdeploy_version_cmd, NULL, "Show APM version.");

@@ -21,6 +21,7 @@
 #include <csp/drivers/usart.h>
 
 #include "satdeploy_agent.h"
+#include "version.h"
 
 #define DEFAULT_NODE_ADDR 5425
 #define DEFAULT_INTERFACE "ZMQ"
@@ -55,6 +56,7 @@ static void print_usage(const char *prog) {
     printf("  -m, --netmask MASK     CSP netmask (default: %d)\n", DEFAULT_NETMASK);
     printf("  -S, --sub-port PORT    ZMQ proxy subscribe port (default: 6000)\n");
     printf("  -P, --pub-port PORT    ZMQ proxy publish port (default: 7000)\n");
+    printf("  -V, --version          Show version and exit\n");
     printf("  -h, --help             Show this help\n");
     printf("\nExamples:\n");
     printf("  %s -i ZMQ -p localhost -a 5425                    # ZMQ defaults\n", prog);
@@ -147,6 +149,7 @@ int main(int argc, char *argv[]) {
         {"netmask", required_argument, 0, 'm'},
         {"sub-port", required_argument, 0, 'S'},
         {"pub-port", required_argument, 0, 'P'},
+        {"version", no_argument, 0, 'V'},
         {"help", no_argument, 0, 'h'},
         {0, 0, 0, 0}
     };
@@ -160,7 +163,7 @@ int main(int argc, char *argv[]) {
     uint16_t zmq_pub_port = CSP_ZMQPROXY_PUBLISH_PORT;
 
     int opt;
-    while ((opt = getopt_long(argc, argv, "i:p:a:b:m:S:P:h", long_options, NULL)) != -1) {
+    while ((opt = getopt_long(argc, argv, "i:p:a:b:m:S:P:Vh", long_options, NULL)) != -1) {
         switch (opt) {
             case 'i':
                 interface = optarg;
@@ -183,6 +186,9 @@ int main(int argc, char *argv[]) {
             case 'P':
                 zmq_pub_port = atoi(optarg);
                 break;
+            case 'V':
+                printf("satdeploy-agent %s (%s)\n", SATDEPLOY_VERSION, SATDEPLOY_GIT_REV);
+                return 0;
             case 'h':
                 print_usage(argv[0]);
                 return 0;
@@ -203,7 +209,7 @@ int main(int argc, char *argv[]) {
         }
     }
 
-    printf("satdeploy-agent v8\n");
+    printf("satdeploy-agent %s (%s)\n", SATDEPLOY_VERSION, SATDEPLOY_GIT_REV);
     printf("  Interface: %s\n", interface);
     printf("  Port/Device: %s\n", port);
     printf("  CSP node: %d\n", node_addr);
