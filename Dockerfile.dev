@@ -171,8 +171,8 @@ TCONF
 
 WORKDIR /satdeploy
 
-# Auto-launch tmux on container entry. -A attaches to an existing session
-# named 'satdeploy' if one exists, otherwise creates it. Wrapped in
-# `bash -lc 'exec ...'` so /etc/profile.d helpers load before tmux spawns
-# its own shells (each pane shell will also pick up /etc/bash.bashrc).
-CMD ["bash", "-lc", "exec tmux new-session -A -s satdeploy"]
+# Auto-launch the entry script on container entry. It pre-builds, starts
+# zmqproxy in background, and opens a 2-pane tmux session (csh on left,
+# agent on right). The script lives in /satdeploy so edits don't require
+# a docker rebuild.
+CMD ["/satdeploy/scripts/docker-entry.sh"]

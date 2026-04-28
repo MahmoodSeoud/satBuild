@@ -46,7 +46,9 @@ build-all() { build-agent && build-apm; }
 # Backward-compat: install-apm is now identical to build-apm.
 install-apm() { build-apm; }
 
-# Override csh so plain `csh` always boots through the project's ZMQ init
-# script (csp init + zmq + apm load). `command csh` calls the binary
-# directly, bypassing this function — no recursion.
-csh() { command csh -i /satdeploy/init/zmq.csh "$@"; }
+# `csh` is intentionally NOT overridden — it stays the plain spaceinventor
+# binary so the operator can launch with any init file:
+#   csh                          # bare shell, no init
+#   csh -i init/zmq.csh          # ZMQ ground transport
+#   csh -i init/can.csh          # (future) CAN transport
+# The auto-launched pane on container entry uses the ZMQ init script.
