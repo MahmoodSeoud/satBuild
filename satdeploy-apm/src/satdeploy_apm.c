@@ -333,7 +333,10 @@ typedef struct {
 static void *dtp_server_thread(void *arg) {
     dtp_server_ctx_t *ctx = (dtp_server_ctx_t *)arg;
     ctx->ready = true;
-    dtp_server_main(&ctx->exit_flag);
+    /* libdtp's dtp_server_main takes bool*, but we mark exit_flag volatile
+     * so writes from the calling thread are visible. Strip the qualifier at
+     * the boundary — both sides only do simple flag reads/writes. */
+    dtp_server_main((bool *)&ctx->exit_flag);
     return NULL;
 }
 
@@ -613,7 +616,8 @@ static int satdeploy_deploy_cmd(struct slash *slash)
         return SLASH_EINVAL;
     }
 
-    int adhoc_mode = 0;
+    /* deploy_single_app re-derives adhoc mode from local/remote overrides;
+     * we just need a place to land app_name when ad-hoc with -f/-r. */
     static char derived_name[128];
 
     /* Handle --all: deploy every app in config */
@@ -662,7 +666,6 @@ static int satdeploy_deploy_cmd(struct slash *slash)
                 if (*p == '.') *p = '-';
             }
             app_name = derived_name;
-            adhoc_mode = 1;
         } else {
             printf("Error: app_name required (or use -f/-r for ad-hoc, or -a for all)\n");
             optparse_help(parser, stdout);
