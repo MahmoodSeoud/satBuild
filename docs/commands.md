@@ -1,6 +1,6 @@
 # Command Reference
 
-The Python CLI handles SSH deployments. The CSH APM handles CSP deployments. Both provide the same five commands (`push`, `status`, `list`, `rollback`, `logs`) and write to the same history database.
+All commands run from inside CSH after `apm load`. They write to the shared `~/.satdeploy/history.db` so deploy history is unified across sessions.
 
 ## push: Deploy files to target
 
@@ -17,7 +17,13 @@ satdeploy push -f PATH -r PATH               # Ad-hoc deploy (no config entry ne
 | `-r, --remote PATH` | Remote path on target |
 | `-F, --force` | Force deploy even if same version |
 | `-a, --all` | Deploy all apps from config |
-| `--require-clean` | Refuse to deploy from a dirty git tree |
+| `-n, --node NUM` | Override the target's CSP node |
+
+The first push for a new `(app, hash)` ships the whole file. If it doesn't
+finish in one pass, the receive bitmap is persisted to
+`/var/lib/satdeploy/state/<app>.dtpstate` on the target. The next push for
+the same `(app, hash)` resumes from there — only the still-missing seqs go
+on the wire.
 
 ## status: Show deployed apps
 
@@ -25,7 +31,8 @@ satdeploy push -f PATH -r PATH               # Ad-hoc deploy (no config entry ne
 satdeploy status
 ```
 
-Hashes the remote file and compares against the history database. Shows the git commit each live file was built from.
+Asks the agent to hash the live remote files and returns them along with
+the git provenance recorded in history.db.
 
 ## list: Show version history
 
@@ -37,12 +44,8 @@ satdeploy list <app>
 
 ```
 satdeploy rollback <app>                     # Roll back to previous version
-satdeploy rollback <app> -H HASH             # Roll back to specific version
+satdeploy rollback <app> <hash>              # Roll back to specific version
 ```
-
-| Flag | Description |
-|------|-------------|
-| `-H, --hash HASH` | Specific backup hash to restore |
 
 ## logs: View service logs
 
@@ -61,39 +64,10 @@ satdeploy logs <app> -l 50                   # Show last 50 lines
 satdeploy config
 ```
 
-## demo: Zero-prerequisite workflow demo
-
-```
-satdeploy demo           # Set up throwaway git repo + local target dir
-satdeploy demo stop      # Tear down
-satdeploy demo status    # Check if the demo is set up
-```
-
-Python CLI only (not available via the CSH APM).
-
-## Shell completion
-
-The easy way. Writes to the system completions directory (same place as `gh`, `docker`, `brew`), no rc file edit needed:
-
-```bash
-satdeploy completion --install
-```
-
-Or add it to your shell rc manually:
-
-```bash
-# Bash: add to ~/.bashrc
-eval "$(_SATDEPLOY_COMPLETE=bash_source satdeploy)"
-
-# Zsh: add to ~/.zshrc
-eval "$(_SATDEPLOY_COMPLETE=zsh_source satdeploy)"
-```
-
 ## Global flags
 
 All commands accept:
 
 | Flag | Description |
 |------|-------------|
-| `-n, --node NUM` | Target CSP node (overrides `agent_node` from config) |
-| `--config PATH` | Config file (default: `~/.satdeploy/config.yaml`) |
+| `-n, --node NUM` | Override the target's CSP node (`agent_node`) |

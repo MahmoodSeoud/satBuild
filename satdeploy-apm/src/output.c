@@ -76,14 +76,20 @@ void output_status_row(const char *app_name, const char *status,
     }
 
     /* Build hash column: "abcd1234 (main@deadbeef)" or just "abcd1234".
-     * file_hash is full 64-char SHA256; display first 8 (git short-hash style)
-     * so the table stays readable at COL_HASH_WIDTH. */
+     * The wire format carries the full 64-hex SHA256 now (needed for safe
+     * cross-pass DTP resume), but the table only shows the leading 8 chars
+     * to stay readable. */
+    char hash_short[16] = "-";
+    if (hash && hash[0]) {
+        size_t copy = strnlen(hash, 8);
+        memcpy(hash_short, hash, copy);
+        hash_short[copy] = '\0';
+    }
     char hash_col[64];
-    const char *h = hash ? hash : "-";
     if (provenance && provenance[0]) {
-        snprintf(hash_col, sizeof(hash_col), "%.8s (%s)", h, provenance);
+        snprintf(hash_col, sizeof(hash_col), "%s (%s)", hash_short, provenance);
     } else {
-        snprintf(hash_col, sizeof(hash_col), "%.8s", h);
+        snprintf(hash_col, sizeof(hash_col), "%s", hash_short);
     }
 
     printf("  %s%s%s %-*s\t%s%-*s%s\t%s%-10s%s\t%s%s%s\n",
@@ -117,12 +123,12 @@ void output_version_row(const char *hash, const char *timestamp, int is_deployed
         status_text = "backup";
     }
 
-    /* Display first 8 chars of SHA256 (git short-hash style). */
-    char hash_short[9] = {0};
-    if (hash) {
-        strncpy(hash_short, hash, 8);
-    } else {
-        hash_short[0] = '-';
+    /* Truncate to 8-char display prefix (full hash is on the wire). */
+    char hash_short[16] = "-";
+    if (hash && hash[0]) {
+        size_t copy = strnlen(hash, 8);
+        memcpy(hash_short, hash, copy);
+        hash_short[copy] = '\0';
     }
 
     printf("  %s%s%s %s%-*s%s\t%s%-*s%s\t%s%s%s\n",

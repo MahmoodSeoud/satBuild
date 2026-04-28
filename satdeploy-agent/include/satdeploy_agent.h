@@ -23,9 +23,17 @@
 /* Maximum app name length */
 #define MAX_APP_NAME_LEN 64
 
-/* SHA256 hex representation: 64 hex chars + NUL terminator. */
+/* Full SHA256 hex length and buffer size.
+ *
+ * We transmit the *full* 64-hex SHA256 across the wire so the agent can
+ * gate cross-pass resume by strict-equality content addressing — an 8-char
+ * prefix is not collision-resistant enough to be safe when a re-staged
+ * binary lands on a partially-received transfer's bitmap.
+ *
+ * Display is still truncated to 8 chars (printf("%.8s", hash)) so the
+ * status table stays readable. */
 #define HASH_HEX_LEN 64
-#define HASH_BUF_LEN 65
+#define HASH_BUF_LEN 65  /* HASH_HEX_LEN + NUL */
 
 /* Global running flag (set to 0 to trigger shutdown) */
 extern volatile int running;
@@ -69,10 +77,11 @@ int copy_file(const char *src, const char *dst);
 /**
  * Compute SHA256 checksum of a file.
  *
- * Writes the full 64-hex-char SHA256 digest, NUL-terminated.
+ * Writes the full 64-char hex digest plus NUL terminator (65 bytes total).
+ * Callers display only the first 8 with `%.8s` for readable output.
  *
  * @param path Path to the file.
- * @param hash_out Buffer to store hex digest.
+ * @param hash_out Buffer to store hex digest (must be >= HASH_BUF_LEN).
  * @param hash_size Size of hash_out buffer (must be >= HASH_BUF_LEN).
  * @return 0 on success, -1 on failure.
  */
@@ -113,29 +122,30 @@ typedef void (*backup_list_callback)(const char *version, const char *timestamp,
 int backup_list(const char *app_name, backup_list_callback callback, void *user_data);
 
 /**
- * Download a file via DTP protocol with cross-pass resume support.
+ * Download a file via DTP protocol with cross-pass resume.
  *
- * If a session-state sidecar exists for app_name (see session_state.h) AND
- * the dest_path temp file exists, the function resumes from the stored byte
- * offset; otherwise it starts fresh. On partial completion (pass ends mid-
- * transfer) the sidecar is updated so the next call resumes correctly.
- * On full completion the sidecar is removed.
+ * If a state sidecar exists for this (app_name, expected_hash) and validates
+ * (size + nof_packets + effective_mtu all match), the receive bitmap is
+ * preloaded from disk and only the still-missing intervals are re-requested.
+ * On full success the sidecar is unlinked. On partial completion (retry
+ * rounds exhausted but no hard error), the bitmap is persisted so the next
+ * pass picks up where this one left off — survives Ctrl-C, agent reboot,
+ * and pass-window boundaries.
  *
- * @param server_node     DTP server CSP node address.
- * @param payload_id      DTP payload identifier.
- * @param dest_path       Local path to save the downloaded file.
- * @param expected_size   Expected file size (0 to skip size check).
- * @param app_name        App name; used for state path + session_id derivation.
- * @param expected_checksum  Full SHA256 hex of the payload; gates resume
- *                           against ground rebuilds and seeds session_id.
- * @param mtu             Max transmission unit (0 = use default 1024).
- * @param throughput      Target throughput in bytes/s (0 = use default).
- * @param timeout         Transfer timeout in seconds (0 = use default 60).
- * @return 0 on full success, -1 on failure (partial = sidecar persists, retry).
+ * @param server_node    DTP server CSP node address.
+ * @param payload_id     DTP payload identifier.
+ * @param dest_path      Local path to save the downloaded file (also the temp).
+ * @param expected_size  Expected file size (0 to skip size check / resume).
+ * @param expected_hash  Full 64-hex SHA256 (gates resume; must match sidecar).
+ * @param app_name       App identifier — picks the sidecar file under SESSION_STATE_DIR.
+ * @param mtu            Max transmission unit (0 = use default 1024).
+ * @param throughput     Target throughput in bytes/s (0 = use default).
+ * @param timeout        Transfer timeout in seconds (0 = use default).
+ * @return 0 on success, -1 on failure.
  */
 int dtp_download_file(uint32_t server_node, uint8_t payload_id,
                       const char *dest_path, uint32_t expected_size,
-                      const char *app_name, const char *expected_checksum,
+                      const char *expected_hash, const char *app_name,
                       uint16_t mtu, uint32_t throughput, uint8_t timeout);
 
 /**
@@ -155,7 +165,7 @@ int app_metadata_save(const char *app_name, const char *remote_path,
  * @param app_name Application name.
  * @param remote_path Buffer for remote path (can be NULL).
  * @param path_size Size of remote_path buffer.
- * @param file_hash Buffer for hash (can be NULL).
+ * @param file_hash Buffer for full SHA256 hex (can be NULL); must be >= HASH_BUF_LEN.
  * @param hash_size Size of file_hash buffer.
  * @param deployed_at Buffer for timestamp (can be NULL).
  * @param time_size Size of deployed_at buffer.

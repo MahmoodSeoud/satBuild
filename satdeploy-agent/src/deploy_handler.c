@@ -216,7 +216,9 @@ static void status_metadata_callback(const char *app_name, const char *remote_pa
 
     if (ctx->count >= ctx->max) return;
 
-    /* Verify file actually exists - skip if missing */
+    /* Verify file actually exists - skip if missing.
+     * One hash slot per status entry — strings are stuffed into the response
+     * as borrowed pointers, so they must outlive the protobuf serialization. */
     static char hash_buf[32][HASH_BUF_LEN];
     if (compute_file_checksum(remote_path, hash_buf[ctx->count], HASH_BUF_LEN) != 0) {
         /* File missing or unreadable - don't include in status */
@@ -651,7 +653,7 @@ static void handle_rollback(const Satdeploy__DeployRequest *req,
 
     /* Update metadata - trust the hash we already know, don't recompute */
     app_metadata_save(req->app_name, remote_path, selected->hash);
-    printf("\033[32m[deploy] %s → rolled back to %s\033[0m\n", req->app_name, selected->hash);
+    printf("\033[32m[deploy] %s → rolled back to %.8s\033[0m\n", req->app_name, selected->hash);
     fflush(stdout);
 
     /* Return the backup path that was restored */
@@ -691,6 +693,23 @@ static void handle_deploy(const Satdeploy__DeployRequest *req,
         return;
     }
 
+    /* Reject the 8-char hash prefix that pre-v0.4.0 APMs put on the wire.
+     * The agent now strcmps the full 64-hex SHA256 (commit 3857bc0), so a
+     * truncated checksum from an old APM would fail every verify and corrupt
+     * the cross-pass-resume sidecar. Fail loudly with an upgrade hint instead. */
+    if (req->expected_checksum == NULL ||
+        strlen(req->expected_checksum) != HASH_HEX_LEN) {
+        printf("\033[31m[deploy] version skew: expected_checksum length=%zu, want %d\033[0m\n",
+               req->expected_checksum ? strlen(req->expected_checksum) : 0,
+               HASH_HEX_LEN);
+        resp->success = 0;
+        resp->error_code = SATDEPLOY__DEPLOY_ERROR__ERR_CHECKSUM_MISMATCH;
+        resp->error_message =
+            "version skew: APM is older than agent — both must use full "
+            "64-hex SHA256 wire format (see CHANGELOG v0.4.0)";
+        return;
+    }
+
     /* TODO: Stop app via libparam if running */
 
     /* Step 2: Backup current file if it exists */
@@ -715,15 +734,13 @@ static void handle_deploy(const Satdeploy__DeployRequest *req,
 
     if (dtp_download_file(req->dtp_server_node, req->payload_id,
                           temp_path, req->expected_size,
-                          req->app_name,
-                          req->expected_checksum ? req->expected_checksum : "",
+                          req->expected_checksum, req->app_name,
                           req->dtp_mtu, req->dtp_throughput,
                           req->dtp_timeout) != 0) {
         resp->success = 0;
         resp->error_code = SATDEPLOY__DEPLOY_ERROR__ERR_DTP_DOWNLOAD_FAILED;
-        resp->error_message = "DTP download failed (partial state preserved for resume on next pass)";
-        /* Intentionally do NOT unlink temp_path here: those bytes are the
-         * substrate the sidecar's interval list refers to. Next push picks up. */
+        resp->error_message = "DTP download failed";
+        /* TODO: Restore from backup if we had one */
         return;
     }
 
@@ -739,7 +756,7 @@ static void handle_deploy(const Satdeploy__DeployRequest *req,
         }
 
         if (strcmp(actual_checksum, req->expected_checksum) != 0) {
-            printf("\033[31m[deploy] checksum mismatch: expected=%s actual=%s\033[0m\n",
+            printf("\033[31m[deploy] checksum mismatch: expected=%.8s actual=%.8s\033[0m\n",
                    req->expected_checksum, actual_checksum);
             resp->success = 0;
             resp->error_code = SATDEPLOY__DEPLOY_ERROR__ERR_CHECKSUM_MISMATCH;
@@ -747,7 +764,7 @@ static void handle_deploy(const Satdeploy__DeployRequest *req,
             unlink(temp_path);
             return;
         }
-        printf("[deploy] checksum ok: %s\n", actual_checksum);
+        printf("[deploy] checksum ok: %.8s\n", actual_checksum);
         fflush(stdout);
     }
 
@@ -826,6 +843,20 @@ static void handle_upload_start(const Satdeploy__DeployRequest *req,
         resp->success = 0;
         resp->error_code = SATDEPLOY__DEPLOY_ERROR__ERR_APP_NOT_FOUND;
         resp->error_message = "No remote_path specified";
+        return;
+    }
+
+    /* Same length guard as handle_deploy — see rationale there. */
+    if (req->expected_checksum == NULL ||
+        strlen(req->expected_checksum) != HASH_HEX_LEN) {
+        printf("\033[31m[deploy] version skew: expected_checksum length=%zu, want %d\033[0m\n",
+               req->expected_checksum ? strlen(req->expected_checksum) : 0,
+               HASH_HEX_LEN);
+        resp->success = 0;
+        resp->error_code = SATDEPLOY__DEPLOY_ERROR__ERR_CHECKSUM_MISMATCH;
+        resp->error_message =
+            "version skew: APM is older than agent — both must use full "
+            "64-hex SHA256 wire format (see CHANGELOG v0.4.0)";
         return;
     }
 
@@ -948,7 +979,7 @@ static void handle_upload_end(const Satdeploy__DeployRequest *req,
         }
 
         if (strcmp(actual_checksum, upload_session.expected_checksum) != 0) {
-            printf("[deploy] Checksum mismatch: expected=%s, actual=%s\n",
+            printf("[deploy] Checksum mismatch: expected=%.8s, actual=%.8s\n",
                    upload_session.expected_checksum, actual_checksum);
             upload_session_reset();
             resp->success = 0;
@@ -956,7 +987,7 @@ static void handle_upload_end(const Satdeploy__DeployRequest *req,
             resp->error_message = "Checksum mismatch";
             return;
         }
-        printf("[deploy] Checksum verified: %s\n", actual_checksum);
+        printf("[deploy] Checksum verified: %.8s\n", actual_checksum);
     }
 
     /* Backup existing file if present */

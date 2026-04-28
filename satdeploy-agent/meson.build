@@ -1,14 +1,14 @@
 project(
 	'satdeploy-agent',
 	'c',
-	version: '0.1.0',
+	version: '0.4.0',
 	subproject_dir: 'lib',
 	default_options: [
 		'c_std=gnu11',
 		'b_lto=false',
 		'default_library=static',
 		'csp:packet_padding_bytes=42',
-		'csp:buffer_count=1000',
+		'csp:buffer_count=8192',
 		'csp:buffer_size=2048',
 		'csp:conn_max=20',
 		'csp:conn_rxqueue_len=1000',
@@ -32,6 +32,21 @@ sources = files(
 	'proto/deploy.pb-c.c',
 )
 
+# version.h is regenerated whenever meson reconfigures, so the embedded git rev
+# reflects the source tree at setup time. Run `meson setup --reconfigure` after
+# committing to refresh it before building a release artifact.
+git_rev_result = run_command('git', 'rev-parse', '--short', 'HEAD', check: false)
+git_rev = git_rev_result.returncode() == 0 ? git_rev_result.stdout().strip() : 'unknown'
+
+version_h = configure_file(
+	input: 'include/version.h.in',
+	output: 'version.h',
+	configuration: {
+		'SATDEPLOY_VERSION': meson.project_version(),
+		'SATDEPLOY_GIT_REV': git_rev,
+	},
+)
+
 dirs = include_directories(
 	'include',
 	'proto',
@@ -50,6 +65,7 @@ deps = [csp_dep, param_dep, dtp_client_dep, proto_c_dep, openssl_dep, m_dep, pth
 satdeploy_agent = executable(
 	'satdeploy-agent',
 	sources,
+	version_h,
 	include_directories: dirs,
 	dependencies: deps,
 	install: true,

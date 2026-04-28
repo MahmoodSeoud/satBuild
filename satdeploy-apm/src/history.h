@@ -9,7 +9,11 @@
 #ifndef SATDEPLOY_HISTORY_H
 #define SATDEPLOY_HISTORY_H
 
-/* SHA256 hex (64 chars) + NUL. Shared by all hash-bearing buffers in APM. */
+/* Full SHA256 hex (64 chars) + NUL. Bumped from 16 because we transmit the
+ * full hash on the wire now: the agent uses it to gate cross-pass DTP resume,
+ * and an 8-char prefix is not collision-resistant for that purpose. The
+ * Python CLI's history schema uses TEXT, so the column itself doesn't need
+ * a migration — only this in-memory buffer width. */
 #define HISTORY_MAX_HASH 65
 #define HISTORY_MAX_PROV 128
 #define HISTORY_MAX_PATH 256
@@ -29,7 +33,7 @@ typedef struct {
 typedef struct {
     const char *module;           /* target name from config, or "default" */
     const char *app;              /* app name */
-    const char *file_hash;        /* SHA256 of deployed file (full 64 hex chars) */
+    const char *file_hash;        /* full 64-hex SHA256 of deployed file */
     const char *remote_path;      /* install path on target */
     const char *action;           /* "push" or "rollback" */
     int         success;          /* 1 for success, 0 for failure */

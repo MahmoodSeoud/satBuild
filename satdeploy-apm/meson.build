@@ -1,4 +1,4 @@
-project('satdeploy-apm', 'c', subproject_dir: 'lib', version: '0.1.0', default_options: [
+project('satdeploy-apm', 'c', subproject_dir: 'lib', version: '0.4.0', default_options: [
   'default_library=static',
   'b_lto=false',
   'b_lundef=false',
@@ -14,6 +14,22 @@ project('satdeploy-apm', 'c', subproject_dir: 'lib', version: '0.1.0', default_o
 ])
 
 includes = include_directories('src')
+
+# version.h is regenerated whenever meson reconfigures, so the embedded git rev
+# reflects the source tree at setup time. Run `meson setup --reconfigure` after
+# committing to refresh it before building a release artifact.
+git_rev_result = run_command('git', 'rev-parse', '--short', 'HEAD', check: false)
+git_rev = git_rev_result.returncode() == 0 ? git_rev_result.stdout().strip() : 'unknown'
+
+version_h = configure_file(
+    input: 'src/version.h.in',
+    output: 'version.h',
+    configuration: {
+        'SATDEPLOY_VERSION': meson.project_version(),
+        'SATDEPLOY_GIT_REV': git_rev,
+    },
+)
+
 apm_csh_dep = dependency('apm_csh', fallback: ['apm_csh', 'apm_csh_dep'], required: true)
 # CSP: headers + compile_args only — actual CSP functions come from CSH at runtime.
 # Linking the static CSP lib would embed uninitialized CSP globals that shadow CSH's.
@@ -41,6 +57,7 @@ satdeploy_apm = shared_library(
       'src/config.c',
       'src/output.c',
       'src/history.c',
+      version_h,
     ],
     include_directories: [includes],
     dependencies: [apm_csh_dep, slash_dep, param_dep, csp_dep, proto_c_dep, yaml_dep, sqlite3_dep, dtp_server_dep],
