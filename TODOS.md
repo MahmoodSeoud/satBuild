@@ -1,5 +1,36 @@
 # TODOS
 
+## Deterministic --interrupt-at-bytes Flag for Demo and Thesis Reproducibility
+
+**What:** Add a debug flag (`#ifdef DEBUG`-gated) to `satdeploy-agent` that
+triggers SIGTERM-on-receiving-byte-N during DTP transfer. Or a wrapper around
+`satdeploy push` on the APM side that kills the agent process at the desired
+byte threshold.
+
+**Why:** Today the cross-pass-resume demo depends on the operator pressing
+Ctrl-C at the right moment — too early and the sidecar might not have been
+written, too late and the transfer completes. Re-takes are expensive,
+especially on FlatSat. A deterministic interrupt point makes (1) demo
+recording one-shot reproducible, and (2) thesis Experiments chapter numbers
+reproducible by a reviewer running the exact same sequence on a checkout.
+
+**Context:** Surfaced in /plan-eng-review on 2026-04-29 against the Pilot
+Sprint design doc. Deferred because the demo recording itself is in
+conditional Week 2 (only fires if a buyer asks for benchmark numbers); this
+flag is a refinement of that conditional path. If conditional Week 2 never
+fires, this TODO never fires either.
+
+**Effort:** S (human: ~2-3 hr / CC: ~30 min). Reuses existing DTP receive
+loop in `satdeploy-agent/src/dtp_client.c`; new code is one byte counter,
+one threshold check, one syscall.
+
+**Priority:** P3 — post-thesis. Not blocking pilot conversion. Useful for
+thesis Experiments chapter if/when external reviewer reproduces the numbers.
+
+**Depends on:** Conditional Week 2 trigger (≥1 buyer asks "what are your
+numbers?"). If the wedge turns out to be rollback/audit/consulting rather
+than measured throughput, this entire path stays cold.
+
 ## Auto Pass-Window Detection in APM
 
 **What:** Replace operator-driven retry (`satdeploy push <app>` each pass) with
