@@ -29,7 +29,17 @@ docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
 
 echo ">>> Starting container $CONTAINER_NAME (repo mounted at /satdeploy)"
 echo ">>> Use 'docker exec -it $CONTAINER_NAME bash' from another terminal for a 2nd pane"
+# NET_ADMIN is required so the experiment harness can apply tc qdisc / netem
+# rules on lo (lossy-link simulation in experiments/). It's a small,
+# container-scoped capability — does not affect the host.
+#
+# --init runs `tini` as PID 1, which reaps zombie children. Without it,
+# the experiment harness leaves <defunct> agent/csh/script processes that
+# accumulate across trials and eventually wedge subsequent docker exec
+# calls. (Symptom: docker exec hangs and is killed with SIGTERM/143.)
 docker run --rm -it \
     --name "$CONTAINER_NAME" \
+    --init \
+    --cap-add=NET_ADMIN \
     -v "$(pwd):/satdeploy" \
     "$IMAGE_TAG" "$@"

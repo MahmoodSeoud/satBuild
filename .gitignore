@@ -10,3 +10,8 @@ build/
 build-native/
 build-arm/
 dist/
+
+# Experiment harness — CSVs and per-trial logs are reproducible from the
+# scripts in experiments/, so we don't track them.
+experiments/results/
+experiments/runs/
