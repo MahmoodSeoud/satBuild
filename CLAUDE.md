@@ -86,6 +86,52 @@ Within-pass reliability is the libdtp selective-repeat retry loop in
 seqs, scan for gaps, re-issue the request with `request_meta.intervals[]`,
 up to 8 retry rounds.
 
+**The retry loop is mandatory, not optional.** Empirical evidence in
+`experiments/results/tail_race.csv` (n=30 per build at 0% loss on ZMQ
+loopback, sizes 256KB / 1MB / 4MB):
+
+- naive build (`-Dnaive_baseline=true`, `DTP_MAX_RETRY_ROUNDS=0`):
+  29/30 trials fail with a 1-2 packet gap at the tail. 1/30 succeeds
+  (4MB cell, trial 7) — the race is near-universal but not literally every
+  transfer.
+- smart build (default): 30/30 succeed. 28/30 needed at least one retry
+  round to close the gap; 2/30 completed cleanly first-pass.
+
+Root cause is `lib/dtp/src/dtp_client.c:284` — the receive loop bails on
+`packet_seq >= metric.last_packet`, exiting as soon as the highest-seq
+packet arrives without checking earlier seqs. The `bytes_received`
+sanity check at line 286 catches the gap, but the loop has already
+broken — `csp_socket_close` runs at line 296 and any packets still in
+the CSP recv queue are discarded. In-flight tail packets are abandoned
+at exit.
+
+This is why `DTP_MAX_RETRY_ROUNDS=8` is load-bearing: round 1 cleans up
+libdtp's own termination race in ~93% of transfers (28/30 in our sweep),
+rounds 2-8 are headroom for actual link loss.
+
+How much link loss the 8-round budget actually buys is in
+`experiments/results/loss_rates.csv` (n=5 per build/loss-rate at 1MB,
+per-trial seed varied so the deterministic loss-filter PRNG produces
+genuine variance):
+
+- 1% loss: smart 5/5 ok, mean 1.8 rounds — trivially within budget.
+- 5% loss: smart 5/5 ok, mean 6.8 rounds — right at the budget edge.
+- 10% loss: smart 0/5 single-pass; all 5 hit the 8-round cap and
+  persisted state for cross-pass resume. The naive build fails 0/5
+  at every positive loss rate (no retry at all).
+
+So the 8-round budget covers up to ~5% loss in a single push; beyond
+that the cross-pass resume mechanism is what closes the gap. That's
+the dividing line between "DTP retries inside one pass" and "satdeploy
+resumes across passes" — the F3.b figure in
+`experiments/results/figures/smoke_comparison.png` shows both regimes.
+
+`experiments/sweep_tail_race.sh` and `experiments/sweep_loss_rates.sh`
+regenerate the two CSVs — re-run them if libdtp, the agent's recv loop,
+or `DTP_MAX_RETRY_ROUNDS` is touched. `experiments/results/probe_hwm.csv`
+(n=6, ZMQ HWM hypothesis test) is retained but tests a different
+hypothesis and isn't the source for these numbers.
+
 Cross-pass persistence wraps that loop. The receive bitmap is written to
 `/var/lib/satdeploy/state/<app>.dtpstate` atomically when a pass exhausts
 its retry budget without full coverage; the next deploy for the same
